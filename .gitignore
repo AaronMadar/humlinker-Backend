@@ -1,0 +1,69 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build output
+dist/
+build/
+
+# Environment variables
+.env
+.env.*.local
+.env.production
+.env.development
+.env.test
+
+# Logs
+logs/
+*.log
+
+# Runtime
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage (tests)
+coverage/
+*.lcov
+
+# IDE / Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NestJS specific
+*.tsbuildinfo
+
+# TypeORM / Prisma (if used)
+ormconfig.json
+prisma/dev.db
+prisma/migrations/
+*.db
+
+# Temporary files
+.tmp/
+temp/
+
+# Docker (optional local overrides)
+docker-compose.override.yml
+
+# Jest cache
+jest-cache/
+
+# Optional: SWC / TS cache
+.swc/
+.turbo/
+
+# npm / yarn / pnpm lock files (keep only one if you prefer)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
