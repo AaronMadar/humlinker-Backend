@@ -1,1 +1,2 @@
-export { GenerateMessageDto } from './generate-message.dto';
+// Aucun DTO public exposé — l'AiService est uniquement injecté en interne.
+

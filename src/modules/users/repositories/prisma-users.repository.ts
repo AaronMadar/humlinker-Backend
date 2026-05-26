@@ -32,6 +32,7 @@ function toUser(record: PrismaUser): User {
     placeholderSource: record.placeholderSource,
     previousEmails: record.previousEmails,
     previousPhoneNumbers: record.previousPhoneNumbers,
+    fcmToken: record.fcmToken,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     lastLoginAt: record.lastLoginAt,
@@ -154,5 +155,34 @@ export class PrismaUsersRepository implements UsersRepository {
 
   async updateLastLoginAt(id: string, date: Date): Promise<User | null> {
     return this.update(id, { lastLoginAt: date });
+  }
+
+  /**
+   * Recherche des utilisateurs inscrits (non-placeholder) par username,
+   * prénom, nom, email ou téléphone (contains, insensible à la casse).
+   * Exclut l'appelant et les placeholders.
+   */
+  async searchUsers(
+    query: string,
+    excludeUserId: string,
+    limit: number,
+  ): Promise<User[]> {
+    const q = query.trim();
+    const records = await this.prisma.user.findMany({
+      where: {
+        isPlaceholder: false,
+        id: { not: excludeUserId },
+        OR: [
+          { username: { contains: q, mode: 'insensitive' } },
+          { firstName: { contains: q, mode: 'insensitive' } },
+          { lastName: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { phoneNumber: { contains: q } },
+        ],
+      },
+      take: limit,
+      orderBy: { username: 'asc' },
+    });
+    return records.map(toUser);
   }
 }

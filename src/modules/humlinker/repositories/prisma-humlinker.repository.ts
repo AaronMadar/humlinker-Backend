@@ -88,12 +88,20 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
           ...(data.blockedBy !== undefined && { blockedBy: data.blockedBy }),
           ...(data.targetLanguage !== undefined && { targetLanguage: data.targetLanguage }),
           ...(data.lastActivityAt !== undefined && { lastActivityAt: data.lastActivityAt }),
+          ...(data.twilioConversationSid !== undefined && { twilioConversationSid: data.twilioConversationSid }),
         },
       });
       return this.toHumlinker(row);
     } catch {
       return null;
     }
+  }
+
+  async findByTwilioConversationSid(sid: string): Promise<Humlinker | null> {
+    const row = await this.prisma.humlinker.findFirst({
+      where: { twilioConversationSid: sid },
+    });
+    return row ? this.toHumlinker(row) : null;
   }
 
   async blockBoth(
@@ -131,6 +139,7 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
     title: string;
     creatorLanguage: string;
     targetLanguage: string | null;
+    twilioConversationSid: string | null;
     lastActivityAt: Date;
     createdAt: Date;
     updatedAt: Date;
@@ -150,6 +159,7 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       title: row.title,
       creatorLanguage: row.creatorLanguage,
       targetLanguage: row.targetLanguage,
+      twilioConversationSid: row.twilioConversationSid,
       lastActivityAt: row.lastActivityAt,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

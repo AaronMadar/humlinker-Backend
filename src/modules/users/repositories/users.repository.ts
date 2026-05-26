@@ -45,6 +45,7 @@ export interface UpdateUserData {
   lastLoginAt?: Date | null;
   previousEmails?: string[];
   previousPhoneNumbers?: string[];
+  fcmToken?: string | null;
 }
 
 export interface UsersRepository {
@@ -66,4 +67,9 @@ export interface UsersRepository {
   create(data: CreateUserData): Promise<User>;
   update(id: string, data: UpdateUserData): Promise<User | null>;
   updateLastLoginAt(id: string, date: Date): Promise<User | null>;
+  /**
+   * Recherche des utilisateurs inscrits (non-placeholder) par username, prénom,
+   * nom, email ou téléphone. Exclut l'utilisateur appelant.
+   */
+  searchUsers(query: string, excludeUserId: string, limit: number): Promise<User[]>;
 }

@@ -53,6 +53,9 @@ export interface Humlinker {
   /** Langue du destinataire (connue si target déjà inscrit, sinon null) */
   targetLanguage: string | null;
 
+  /** SID de la Conversation Twilio pour le routing des webhooks entrants */
+  twilioConversationSid: string | null;
+
   lastActivityAt: Date;
   createdAt: Date;
   updatedAt: Date;

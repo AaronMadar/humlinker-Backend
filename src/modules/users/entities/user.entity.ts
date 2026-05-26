@@ -28,6 +28,9 @@ export interface User {
   previousEmails: string[];
   previousPhoneNumbers: string[];
 
+  /** Token FCM pour les push notifications — mis à jour à chaque login */
+  fcmToken: string | null;
+
   createdAt: Date;
   updatedAt: Date;
   lastLoginAt: Date | null;

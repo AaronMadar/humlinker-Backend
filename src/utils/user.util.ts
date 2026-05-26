@@ -1,17 +1,17 @@
 import type { User } from '../modules/users/entities';
 
 /**
- * User sécurisé sans passwordHash.
+ * User sécurisé — sans passwordHash ni fcmToken.
+ * passwordHash : ne jamais exposer les credentials
+ * fcmToken     : token device Firebase, privé au user, inutile côté client
  */
-export type SafeUser = Omit<User, 'passwordHash'>;
+export type SafeUser = Omit<User, 'passwordHash' | 'fcmToken'>;
 
 /**
- * Retire passwordHash avant de retourner un user au frontend.
- * On decompose user, en 2 , et on prend que safe user qui est la 2eme partie qui nous interesse sans password
+ * Retire passwordHash et fcmToken avant de retourner un user au frontend.
  */
 export function sanitizeUser(user: User): SafeUser {
-  const { passwordHash: _passwordHash, ...safeUser } = user;
-
+  const { passwordHash: _pw, fcmToken: _fcm, ...safeUser } = user;
   return safeUser;
 }
 

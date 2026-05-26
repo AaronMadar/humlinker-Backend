@@ -37,6 +37,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { normalizePhone } from '../../utils';
@@ -51,15 +52,19 @@ import {
   type UsersRepository,
 } from '../users/repositories';
 import { UsersService } from '../users/users.service';
+import { SmsService } from '../../integrations/sms/sms.service';
 
 @Injectable()
 export class HumlinkerService {
+  private readonly logger = new Logger(HumlinkerService.name);
+
   constructor(
     @Inject(HUMLINKER_REPOSITORY)
     private readonly humlinkerRepository: HumlinkerRepository,
     @Inject(USERS_REPOSITORY)
     private readonly usersRepository: UsersRepository,
     private readonly usersService: UsersService,
+    private readonly smsService: SmsService,
   ) {}
 
   // ─── Création ─────────────────────────────────────────────────────────────
@@ -172,7 +177,52 @@ export class HumlinkerService {
       }),
     ]);
 
-    return { ...senderHumlinker, mirrorId: mirrorHumlinker._id };
+    // Étape 8 — Pour les canaux SMS/WhatsApp : crée une Twilio Conversation dédiée.
+    // Chaque humlinker a son propre conversationSid → le webhook peut router
+    // précisément la réponse du target vers le bon humlinker mirror.
+    let twilioConversationSid: string | undefined;
+
+    if (
+      (dto.communicationChannel === 'sms' ||
+        dto.communicationChannel === 'whatsapp') &&
+      normalizedPhone
+    ) {
+      try {
+        twilioConversationSid =
+          await this.smsService.createConversationForHumlinker(
+            normalizedPhone,
+            dto.communicationChannel,
+            senderHumlinker._id, // friendlyName = humhlinkerId pour debug Twilio
+          );
+
+        // Stocke le SID sur les deux côtés (sender et mirror)
+        await Promise.all([
+          this.humlinkerRepository.update(senderHumlinker._id, {
+            twilioConversationSid,
+          }),
+          this.humlinkerRepository.update(mirrorHumlinker._id, {
+            twilioConversationSid,
+          }),
+        ]);
+
+        this.logger.log(
+          `Twilio Conversation ${twilioConversationSid} liée au humlinker ${senderHumlinker._id}`,
+        );
+      } catch (err) {
+        // Non-bloquant : le humlinker est créé mais sans Conversation Twilio.
+        // Le premier send() utilisera le fallback SMS simple.
+        this.logger.error(
+          `Échec création Twilio Conversation pour humlinker ${senderHumlinker._id}`,
+          err,
+        );
+      }
+    }
+
+    return {
+      ...senderHumlinker,
+      mirrorId: mirrorHumlinker._id,
+      twilioConversationSid: twilioConversationSid ?? null,
+    };
   }
 
   // ─── Lecture ──────────────────────────────────────────────────────────────

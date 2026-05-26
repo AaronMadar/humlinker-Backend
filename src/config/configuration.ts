@@ -52,10 +52,24 @@ export default () => ({
     from: process.env.MAIL_FROM ?? 'noreply@humlinker.com',
   },
 
-  // Twilio — envoi des OTP par SMS
+  // Twilio — envoi des OTP par SMS + Conversations pour les humlinkers
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID ?? '',
     authToken: process.env.TWILIO_AUTH_TOKEN ?? '',
     phoneNumber: process.env.TWILIO_PHONE_NUMBER ?? '',
+    // Numéro WhatsApp Business approuvé (format E.164, sans préfixe "whatsapp:")
+    whatsappNumber: process.env.TWILIO_WHATSAPP_NUMBER ?? '',
+  },
+
+  // Gemini (Google AI) — génération des drafts (objectiveMessage + realMessage)
+  ai: {
+    geminiApiKey: process.env.GEMINI_API_KEY ?? '',
+  },
+
+  // Firebase — push notifications FCM
+  firebase: {
+    projectId: process.env.FIREBASE_PROJECT_ID ?? '',
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL ?? '',
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY ?? '').replace(/\\n/g, '\n'),
   },
 });

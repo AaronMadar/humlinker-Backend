@@ -14,7 +14,7 @@
  *
  * ───────────────────────────────────────────────────────────────────────────
  */
-import { Body, Controller, Get, Patch } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Query } from '@nestjs/common';
 import type { ApiResponse } from '../../common';
 import { CurrentUser } from '../../decorators';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
@@ -23,6 +23,8 @@ import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { UpdateEmailDto } from './dto/update-email.dto';
 import { UpdatePhoneDto } from './dto/update-phone.dto';
+import { UpdateFcmTokenDto } from './dto/update-fcm-token.dto';
+import { SearchUsersQueryDto } from './dto/search-users-query.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -94,5 +96,44 @@ export class UsersController {
       data: { message: 'Mot de passe mis à jour avec succès.' },
       timestamp: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Met à jour le token FCM pour les push notifications.
+   * Appelé par le front à chaque ouverture de l'app ou après un login.
+   */
+  @Patch('me/fcm-token')
+  async updateFcmToken(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: UpdateFcmTokenDto,
+  ): Promise<ApiResponse<null>> {
+    await this.usersService.updateFcmToken(user.userId, dto.fcmToken);
+    return {
+      success: true,
+      data: null,
+      message: 'Token FCM mis à jour.',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Recherche des utilisateurs Humlinker inscrits.
+   * Utilisé lors de la création d'un humlinker pour trouver un contact inscrit
+   * et récupérer son targetUserId.
+   *
+   * Query params :
+   *  - q     : terme de recherche (username, prénom, nom, email, téléphone)
+   *  - limit : nombre max de résultats (1–50, défaut 10)
+   *
+   * Retourne uniquement les utilisateurs non-placeholder.
+   * Les champs sensibles (passwordHash, fcmToken) sont exclus.
+   */
+  @Get('search')
+  async searchUsers(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SearchUsersQueryDto,
+  ): Promise<ApiResponse<SafeUser[]>> {
+    const data = await this.usersService.searchUsers(user.userId, query);
+    return { success: true, data, timestamp: new Date().toISOString() };
   }
 }

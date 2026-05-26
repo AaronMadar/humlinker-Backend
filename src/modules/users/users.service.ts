@@ -47,6 +47,7 @@ import type { UpdatePasswordDto } from './dto/update-password.dto';
 import type { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import type { UpdateEmailDto } from './dto/update-email.dto';
 import type { UpdatePhoneDto } from './dto/update-phone.dto';
+import type { SearchUsersQueryDto } from './dto/search-users-query.dto';
 import {
   USERS_REPOSITORY,
   type CreateUserData,
@@ -249,6 +250,32 @@ export class UsersService {
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     const updated = await this.usersRepository.update(userId, { passwordHash });
     if (!updated) throw new NotFoundException('Utilisateur introuvable.');
+  }
+
+  // ─── FCM Token ────────────────────────────────────────────────────────────
+
+  /**
+   * Met à jour le token FCM de l'utilisateur.
+   * Appelé à chaque login / ouverture de l'app.
+   */
+  async updateFcmToken(userId: string, fcmToken: string): Promise<void> {
+    await this.usersRepository.update(userId, { fcmToken });
+  }
+
+  // ─── Recherche utilisateurs ───────────────────────────────────────────────
+
+  /**
+   * Recherche des utilisateurs inscrits (non-placeholder) par username,
+   * prénom, nom, email ou téléphone.
+   * Exclut l'appelant. Limite par défaut : 10, max : 50.
+   */
+  async searchUsers(
+    callerId: string,
+    dto: SearchUsersQueryDto,
+  ): Promise<SafeUser[]> {
+    const limit = dto.limit ?? 10;
+    const users = await this.usersRepository.searchUsers(dto.q, callerId, limit);
+    return users.map(sanitizeUser);
   }
 
   // ─── Placeholder users ────────────────────────────────────────────────────

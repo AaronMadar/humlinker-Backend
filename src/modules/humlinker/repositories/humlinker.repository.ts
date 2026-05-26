@@ -31,6 +31,7 @@ export interface UpdateHumlinkerData {
   blockedBy?: string | null;
   targetLanguage?: string | null;
   lastActivityAt?: Date;
+  twilioConversationSid?: string | null;
 }
 
 export interface HumlinkerRepository {
@@ -61,6 +62,12 @@ export interface HumlinkerRepository {
 
   /** Met à jour un humlinker */
   update(id: string, data: UpdateHumlinkerData): Promise<Humlinker | null>;
+
+  /**
+   * Trouve un humlinker via son SID de Conversation Twilio.
+   * Utilisé pour router les webhooks entrants au bon humlinker.
+   */
+  findByTwilioConversationSid(sid: string): Promise<Humlinker | null>;
 
   /**
    * Bloque un humlinker ET son mirror en une seule opération (transaction).

@@ -53,6 +53,15 @@ model User {
   previousEmails       String[]               @default([])
   previousPhoneNumbers String[]               @default([])
 
+  /// Token FCM (Firebase Cloud Messaging) pour les push notifications.
+  /// Mis à jour à chaque login / ouverture de l'app.
+  /// null si l'utilisateur n'a pas activé les notifications.
+  fcmToken             String?
+
+  /// ID de la Conversation Twilio associée à ce user pour les SMS/WhatsApp.
+  /// Stocké ici pour le routage des webhooks entrants.
+  twilioConversationSid String?
+
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
   lastLoginAt          DateTime?
@@ -118,6 +127,11 @@ model Humlinker {
   creatorLanguage    String
   /// Langue du destinataire (renseignée si target existant ou lors de la complétion)
   targetLanguage     String?
+
+  /// SID de la Conversation Twilio pour ce humlinker (SMS/WhatsApp).
+  /// Créé lors du premier envoi vers un target non-app.
+  /// Permet le routage précis des webhooks entrants (multi-humlinker par target).
+  twilioConversationSid String?
 
   lastActivityAt     DateTime        @default(now())
   createdAt          DateTime        @default(now())
