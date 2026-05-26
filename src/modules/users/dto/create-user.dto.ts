@@ -11,8 +11,13 @@ import {
   IsUrl,
   MinLength,
 } from 'class-validator';
-import type { UserAuthProvider, UserPlaceholderSource } from '../entities';
+import type {
+  UserAuthProvider,
+  UserGender,
+  UserPlaceholderSource,
+} from '../entities';
 
+const GENDERS: UserGender[] = ['male', 'female', 'other'];
 const AUTH_PROVIDERS: UserAuthProvider[] = ['local', 'google'];
 const PLACEHOLDER_SOURCES: Exclude<UserPlaceholderSource, null>[] = [
   'humlinker_invitation',
@@ -22,15 +27,22 @@ const PLACEHOLDER_SOURCES: Exclude<UserPlaceholderSource, null>[] = [
 export class CreateUserDto {
   @IsString()
   @IsNotEmpty()
-  firstName: string;
+  firstName!: string;
 
   @IsString()
   @IsNotEmpty()
-  lastName: string;
+  lastName!: string;
 
   @IsString()
   @IsNotEmpty()
-  username: string;
+  username!: string;
+
+  @IsEnum(GENDERS)
+  gender!: UserGender;
+
+  @IsString()
+  @IsNotEmpty()
+  language!: string;
 
   @IsOptional()
   @IsEmail()
@@ -41,12 +53,8 @@ export class CreateUserDto {
   phoneNumber?: string | null;
 
   @IsString()
-  @IsNotEmpty()
-  language: string;
-
-  @IsString()
   @MinLength(8)
-  password: string;
+  password!: string;
 
   @IsOptional()
   @IsArray()

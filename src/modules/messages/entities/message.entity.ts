@@ -10,7 +10,6 @@ export interface Message {
   senderType: MessageSenderType;
   senderUserId: string | null;
   content: string;
-  channel: MessageChannel;
   status: MessageStatus;
   createdAt: Date;
 }

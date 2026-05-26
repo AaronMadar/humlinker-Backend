@@ -24,6 +24,10 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggingInterceptor());
 
   await app.listen(config.app.port);
+  console.log(`🚀 Server is running on http://localhost:${config.app.port}`);
+
+    
 }
+
 
 bootstrap();

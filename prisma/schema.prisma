@@ -1,0 +1,221 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  admin
+}
+
+enum UserGender {
+  male
+  female
+  other
+}
+
+enum UserAuthProvider {
+  local
+  google
+}
+
+enum UserPlaceholderSource {
+  humlinker_invitation
+  manual
+}
+
+model User {
+  id                   String                 @id @default(uuid())
+  role                 UserRole               @default(user)
+  gender               UserGender?
+  firstName            String?
+  lastName             String?
+  username             String?                @unique
+  email                String?                @unique
+  phoneNumber          String?                @unique
+  language             String
+  passwordHash         String?
+  authProviders        UserAuthProvider[]
+  profilePicture       String?
+  isEmailVerified      Boolean                @default(false)
+  isPhoneVerified      Boolean                @default(false)
+  isPlaceholder        Boolean                @default(false)
+  placeholderSource    UserPlaceholderSource?
+
+  // Historique des anciens emails et téléphones.
+  // Utilisé pour la synchronisation des contacts :
+  // si un contact a l'ancien numéro/email d'un utilisateur Humlinker,
+  // il sera quand même retrouvé et associé.
+  previousEmails       String[]               @default([])
+  previousPhoneNumbers String[]               @default([])
+
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  lastLoginAt          DateTime?
+
+  // Relations
+  sentHumlinkers     Humlinker[] @relation("HumlinkerSender")
+  receivedHumlinkers Humlinker[] @relation("HumlinkerTarget")
+  ownedContacts      Contact[]   @relation("ContactOwner")
+  matchedContacts    Contact[]   @relation("ContactMatch")
+
+  // GIN indexes pour la recherche rapide dans les tableaux de contacts
+  @@index([previousEmails], type: Gin)
+  @@index([previousPhoneNumbers], type: Gin)
+
+  @@map("users")
+}
+
+// ─── Humlinker ────────────────────────────────────────────────────────────────
+
+enum HumlinkerStatus {
+  pending   // créé, aucun message envoyé
+  active    // au moins un message échangé
+  archived  // archivé par l'utilisateur (hors liste principale)
+  blocked   // bloqué — les deux côtés sont figés
+}
+
+enum HumlinkerChannel {
+  app
+  sms
+  whatsapp
+  email
+}
+
+model Humlinker {
+  id                 String          @id @default(uuid())
+  senderId           String
+  targetId           String
+
+  /// ID du humlinker miroir (côté destinataire).
+  /// Pas de FK Prisma pour éviter la référence circulaire.
+  mirrorId           String?         @unique
+
+  status             HumlinkerStatus @default(pending)
+  /// userId de celui qui a bloqué (null si pas bloqué)
+  blockedBy          String?
+
+  /// Canal de communication choisi par le créateur
+  communicationChannel HumlinkerChannel @default(app)
+
+  /// Nom donné au contact par le créateur
+  targetContactName  String
+  /// Email brut saisi par le créateur (nullable)
+  targetContactEmail String?
+  /// Téléphone normalisé E.164 saisi par le créateur (nullable)
+  targetContactPhone String?
+
+  /// Type de relation (ex: "collègue", "ami", "client")
+  relationshipType   String
+  /// Titre du humlinker
+  title              String
+
+  /// Langue du créateur
+  creatorLanguage    String
+  /// Langue du destinataire (renseignée si target existant ou lors de la complétion)
+  targetLanguage     String?
+
+  lastActivityAt     DateTime        @default(now())
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  sender       User          @relation("HumlinkerSender", fields: [senderId], references: [id])
+  target       User          @relation("HumlinkerTarget", fields: [targetId], references: [id])
+  drafts       Draft[]
+  chatMessages ChatMessage[]
+
+  /// Un seul humlinker par paire (sender → target)
+  @@unique([senderId, targetId])
+  @@index([senderId, lastActivityAt(sort: Desc)])
+  @@index([targetId, lastActivityAt(sort: Desc)])
+  @@index([status])
+
+  @@map("humlinkers")
+}
+
+// ─── Draft ────────────────────────────────────────────────────────────────────
+
+model Draft {
+  id               String   @id @default(uuid())
+  humhlinkerId     String
+  /// Résumé visible par le créateur (ce qu'il souhaite dire)
+  objectiveMessage String
+  /// Message diplomatique généré par l'IA, envoyé au target (jamais montré au créateur)
+  realMessage      String
+  /// Numéro de version (auto-incrémenté côté service)
+  version          Int
+  /// true une fois que le créateur a cliqué "Send"
+  isSent           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  humlinker Humlinker @relation(fields: [humhlinkerId], references: [id], onDelete: Cascade)
+
+  @@index([humhlinkerId, version(sort: Desc)])
+
+  @@map("drafts")
+}
+
+// ─── ChatMessage ──────────────────────────────────────────────────────────────
+
+enum ChatMessageRole {
+  user    // message envoyé par l'utilisateur à l'IA
+  ai      // réponse de l'IA
+  system  // message système (modération, notifications)
+}
+
+enum ChatMessageType {
+  text           // message texte standard
+  draft_snapshot // ancienne version du draft (grisée dans le chat)
+  system         // message système
+}
+
+model ChatMessage {
+  id           String          @id @default(uuid())
+  humhlinkerId String
+  role         ChatMessageRole
+  type         ChatMessageType @default(text)
+  content      String
+  /// Lien vers le Draft si type = draft_snapshot
+  draftId      String?
+  createdAt    DateTime        @default(now())
+
+  humlinker Humlinker @relation(fields: [humhlinkerId], references: [id], onDelete: Cascade)
+
+  @@index([humhlinkerId, createdAt(sort: Desc)])
+
+  @@map("chat_messages")
+}
+
+// ─── Contact ──────────────────────────────────────────────────────────────────
+
+model Contact {
+  id            String   @id @default(uuid())
+  ownerId       String
+  /// Nom du contact tel qu'il apparaît dans le téléphone de l'utilisateur
+  name          String
+  /// Numéros de téléphone normalisés E.164
+  phoneNumbers  String[]
+  /// Emails en minuscules
+  emails        String[]
+  /// User Humlinker correspondant (null si pas encore inscrit)
+  matchedUserId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  owner       User  @relation("ContactOwner", fields: [ownerId], references: [id])
+  matchedUser User? @relation("ContactMatch", fields: [matchedUserId], references: [id])
+
+  /// Un seul enregistrement par contact par propriétaire
+  @@unique([ownerId, name])
+  @@index([ownerId])
+  @@index([matchedUserId])
+  /// GIN indexes pour les recherches dans les tableaux
+  @@index([phoneNumbers], type: Gin)
+  @@index([emails], type: Gin)
+
+  @@map("contacts")
+}

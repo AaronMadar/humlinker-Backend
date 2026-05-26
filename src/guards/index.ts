@@ -1,3 +1,1 @@
-/**
- * Application guards (auth, roles, throttling, etc.) are exported from here.
- */
+export { JwtAuthGuard } from './jwt-auth.guard';

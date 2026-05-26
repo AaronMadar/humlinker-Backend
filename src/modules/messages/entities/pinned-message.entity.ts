@@ -5,9 +5,7 @@ export type PinnedMessageStatus = 'active' | 'sent';
 export interface PinnedMessage {
   _id: string;
   humlinkerId: string;
-  creatorUserId: string;
   objectiveMessage: string;
-  channel: MessageChannel;
   status: PinnedMessageStatus;
   version: number;
   finalContent: string;

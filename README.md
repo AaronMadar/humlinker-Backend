@@ -21,6 +21,10 @@ src/
 
 ```bash
 npm install
+cp .env.example .env
+# Configure DATABASE_URL and JWT_SECRET in .env
+npm run prisma:generate
+npm run prisma:migrate
 ```
 
 ## Run
@@ -31,7 +35,24 @@ npm run start:dev
 
 API base path: `http://localhost:3000/api/v1`
 
-Health check: `GET /api/v1/health`
+### Health
+
+- `GET /api/v1/health` (public)
+
+### Auth (public)
+
+- `POST /api/v1/auth/register` — body: `RegisterUserDto`, returns `{ user, token }`
+- `POST /api/v1/auth/login` — body: `{ identifier, password }`, returns `{ user, token }`
+
+### Users (JWT required)
+
+- `GET /api/v1/users/me`
+- `GET /api/v1/users/:id`
+- `PATCH /api/v1/users/me`
+- `PATCH /api/v1/users/me/password`
+- `GET /api/v1/users/search?q=...&limit=10`
+
+Send `Authorization: Bearer <token>` on protected routes.
 
 ## Test
 
