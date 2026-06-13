@@ -18,6 +18,8 @@ import type { UpdatePhoneDto } from './dto/update-phone.dto';
 import type { SearchUsersQueryDto } from './dto/search-users-query.dto';
 import { USERS_REPOSITORY, type CreateUserData, type UsersRepository } from './repositories';
 import { OtpService } from '../auth/services/otp.service';
+import { RedisService } from '../../redis/redis.service';
+import { PrismaService } from '../../database';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -50,6 +52,8 @@ export class UsersService {
     private readonly usersRepository: UsersRepository,
     private readonly otpService: OtpService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly redisService: RedisService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async getMe(userId: string): Promise<SafeUser> {
@@ -63,7 +67,6 @@ export class UsersService {
   }
 
   async updateUserProfile(userId: string, dto: UpdateUserProfileDto): Promise<SafeUser> {
-    await this.findUserOrThrow(userId);
     const updated = await this.usersRepository.update(userId, {
       firstName: dto.firstName,
       lastName: dto.lastName,
@@ -72,7 +75,53 @@ export class UsersService {
       gender: dto.gender,
     });
     if (!updated) throw new NotFoundException('Utilisateur introuvable.');
+
+    // Synchronise tous les snapshots (sender + target) et invalide le cache Redis
+    await this.syncProfileSnapshots(updated);
+
     return sanitizeUser(updated);
+  }
+
+  /**
+   * Met à jour le targetSnapshot dans tous les humlinkers où l'utilisateur est target,
+   * puis invalide le cache Redis target-ctx correspondant.
+   * Le senderSnapshot n'est pas maintenu ici — les infos du sender viennent de sa session auth.
+   */
+  private async syncProfileSnapshots(user: {
+    _id: string;
+    firstName: string | null;
+    lastName: string | null;
+    email: string | null;
+    language: string;
+    gender: string | null;
+    profilePicture: string | null;
+    isPlaceholder: boolean;
+  }): Promise<void> {
+    const asTarget = await this.prisma.humlinker.findMany({
+      where: { targetId: user._id },
+      select: { id: true },
+    });
+
+    if (!asTarget.length) return;
+
+    await Promise.all([
+      this.prisma.humlinker.updateMany({
+        where: { targetId: user._id },
+        data: {
+          targetSnapshot: {
+            userId: user._id,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            language: user.language,
+            gender: user.gender,
+            profilePicture: user.profilePicture,
+            isPlaceholder: user.isPlaceholder,
+          },
+        },
+      }),
+      ...asTarget.map((h) => this.redisService.del(`humlinker:target-ctx:${h.id}`)),
+    ]);
   }
 
   async updateEmail(userId: string, dto: UpdateEmailDto): Promise<SafeUser> {

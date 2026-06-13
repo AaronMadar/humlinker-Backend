@@ -45,10 +45,28 @@ import {
   type DraftRepository,
 } from './repositories';
 import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
+import { RedisService } from '../../redis/redis.service';
+
+/** Durée de vie du cache target-ctx : 7 jours */
+const TARGET_CTX_TTL = 60 * 60 * 24 * 7;
+
+interface TargetCtxCache {
+  name: string;
+  language: string;
+}
 
 const EMPTY_DRAFT_OBJECTIVE = 'Rien à transmettre pour le moment.';
 const CHAT_HISTORY_LIMIT = 30;
 const SENT_DRAFTS_CONTEXT = 10;
+/** Versions du draft actif en cache Redis (objectiveMessage + realMessage) */
+const DRAFT_VERSIONS_KEY = (id: string) => `draft-versions:${id}`;
+const DRAFT_VERSIONS_TTL = 60 * 60 * 24 * 7; // 7 jours
+const MAX_DRAFT_VERSIONS = 20;
+
+interface DraftVersion {
+  objectiveMessage: string;
+  realMessage: string;
+}
 
 export interface ChatResponse {
   /** Messages du chat triés chronologiquement (30 derniers) */
@@ -57,6 +75,8 @@ export interface ChatResponse {
   activeDraft: SafeDraft | null;
   /** Indique s'il y a plus de messages à charger (scroll vers le haut) */
   hasMore: boolean;
+  /** Versions du draft actif (objectiveMessage seulement, sans realMessage) */
+  draftVersions: string[];
 }
 
 /** Draft exposé au sender — sans realMessage */
@@ -83,9 +103,33 @@ export class MessagesService {
     private readonly aiService: AiService,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
+    private readonly redisService: RedisService,
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
   ) { }
+
+  // ─── Cache Redis ──────────────────────────────────────────────────────────
+
+  /**
+   * Retourne le targetName + targetLanguage depuis le cache Redis.
+   * Si absent, lit depuis le snapshot du humlinker et peuple le cache.
+   */
+  private async getTargetCtx(
+    humhlinkerId: string,
+    humlinker: Humlinker,
+  ): Promise<TargetCtxCache> {
+    const key = `humlinker:target-ctx:${humhlinkerId}`;
+    const cached = await this.redisService.get(key);
+    if (cached) {
+      return JSON.parse(cached) as TargetCtxCache;
+    }
+    const ctx: TargetCtxCache = {
+      name: [humlinker.target.firstName, humlinker.target.lastName].filter(Boolean).join(' ') || 'le destinataire',
+      language: humlinker.target.language,
+    };
+    await this.redisService.set(key, JSON.stringify(ctx), TARGET_CTX_TTL);
+    return ctx;
+  }
 
   // ─── Lecture ──────────────────────────────────────────────────────────────
 
@@ -115,10 +159,13 @@ export class MessagesService {
     // Draft actif — on ne retourne PAS le realMessage
     const activeDraft = await this.draftRepository.findActiveDraft(humhlinkerId);
 
+    const draftVersions = await this.listDraftVersionObjectives(humhlinkerId);
+
     return {
       messages: sliced,
       activeDraft: activeDraft ? this.toSafeDraft(activeDraft) : null,
       hasMore,
+      draftVersions,
     };
   }
 
@@ -163,10 +210,13 @@ export class MessagesService {
       .filter(Boolean)
       .join(' ') || 'L\'expéditeur';
 
+    const targetCtx = await this.getTargetCtx(humhlinkerId, humlinker);
+
     const aiContext: AiContext = {
       senderName,
+      targetName: targetCtx.name,
       senderLanguage: humlinker.sender.language,
-      targetLanguage: humlinker.target.language,
+      targetLanguage: targetCtx.language,
       relationshipType: humlinker.relationshipType,
       lastSentDrafts,
       chatHistory,
@@ -199,7 +249,59 @@ export class MessagesService {
       updatedDraft = currentDraft ?? (await this.createEmptyDraft(humhlinkerId, 1));
     }
 
+    // 5. Pousse la nouvelle version dans le cache Redis
+    if (aiResult.draftChanged) {
+      await this.pushDraftVersion(humhlinkerId, {
+        objectiveMessage: aiResult.objectiveMessage,
+        realMessage: aiResult.realMessage,
+      });
+    }
+
     return { activeDraft: this.toSafeDraft(updatedDraft) };
+  }
+
+  // ─── Restauration d'une version précédente du draft ──────────────────────
+
+  /**
+   * Remplace l'objectiveMessage du draft actif par une version précédente choisie
+   * par l'utilisateur, puis régénère le realMessage via l'IA.
+   * Aucune ChatMessage n'est créée (pas de nouveau message dans le chat).
+   */
+  async restoreDraftVersion(
+    humhlinkerId: string,
+    userId: string,
+    versionIndex: number,
+  ): Promise<{ activeDraft: SafeDraft; draftVersions: string[] }> {
+    const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
+    this.assertNotBlocked(humlinker);
+
+    const versions = await this.listDraftVersions(humhlinkerId);
+    if (versionIndex < 0 || versionIndex >= versions.length) {
+      throw new NotFoundException('Version introuvable.');
+    }
+    const selected = versions[versionIndex];
+
+    // Restaure directement depuis le cache — pas d'appel IA
+    const activeDraft = await this.draftRepository.findActiveDraft(humhlinkerId);
+    let updatedDraft: Draft;
+    if (activeDraft) {
+      updatedDraft = (await this.draftRepository.update(activeDraft._id, {
+        objectiveMessage: selected.objectiveMessage,
+        realMessage: selected.realMessage,
+      })) ?? activeDraft;
+    } else {
+      updatedDraft = await this.draftRepository.create({
+        humhlinkerId,
+        objectiveMessage: selected.objectiveMessage,
+        realMessage: selected.realMessage,
+        version: 1,
+      });
+    }
+
+    return {
+      activeDraft: this.toSafeDraft(updatedDraft),
+      draftVersions: versions.map(v => v.objectiveMessage),
+    };
   }
 
   // ─── Envoi du draft au target ─────────────────────────────────────────────
@@ -246,6 +348,9 @@ export class MessagesService {
     const updateData: UpdateHumlinkerData = { lastActivityAt: new Date() };
     if (humlinker.status === 'pending') updateData.status = 'active';
     await this.humlinkerRepository.update(humhlinkerId, updateData);
+
+    // 5b. Supprime les versions du cache (draft envoyé, on repart de zéro)
+    await this.redisService.del(DRAFT_VERSIONS_KEY(humhlinkerId));
 
     // 6. Nouveau draft vide pour la prochaine itération
     const nextVersion = activeDraft.version + 1;
@@ -309,10 +414,13 @@ export class MessagesService {
       .filter(Boolean)
       .join(' ') || 'L\'expéditeur';
 
+    const mirrorTargetCtx = await this.getTargetCtx(mirrorHumhlinkerId, mirrorHumlinker);
+
     const aiResult = await this.aiService.processUserMessage({
       senderName: mirrorSenderName,
+      targetName: mirrorTargetCtx.name,
       senderLanguage: mirrorHumlinker.sender.language,
-      targetLanguage: mirrorHumlinker.target.language,
+      targetLanguage: mirrorTargetCtx.language,
       relationshipType: mirrorHumlinker.relationshipType,
       lastSentDrafts,
       chatHistory,
@@ -381,6 +489,30 @@ export class MessagesService {
     }
   }
 
+  // ─── Helpers versions cache ──────────────────────────────────────────────
+
+  private async pushDraftVersion(humhlinkerId: string, version: DraftVersion): Promise<void> {
+    const key = DRAFT_VERSIONS_KEY(humhlinkerId);
+    const versions = await this.listDraftVersions(humhlinkerId);
+    // Déduplique : ignore si identique à la dernière version
+    if (versions.length > 0 && versions[versions.length - 1].objectiveMessage === version.objectiveMessage) return;
+    versions.push(version);
+    if (versions.length > MAX_DRAFT_VERSIONS) versions.shift();
+    await this.redisService.set(key, JSON.stringify(versions), DRAFT_VERSIONS_TTL);
+  }
+
+  private async listDraftVersions(humhlinkerId: string): Promise<DraftVersion[]> {
+    const key = DRAFT_VERSIONS_KEY(humhlinkerId);
+    const raw = await this.redisService.get(key);
+    if (!raw) return [];
+    try { return JSON.parse(raw) as DraftVersion[]; } catch { return []; }
+  }
+
+  private async listDraftVersionObjectives(humhlinkerId: string): Promise<string[]> {
+    const versions = await this.listDraftVersions(humhlinkerId);
+    return versions.map(v => v.objectiveMessage);
+  }
+
   /**
    * Dispatche le realMessage au target.
    *
@@ -397,7 +529,7 @@ export class MessagesService {
     const { targetId } = humlinker;
     const senderName = [humlinker.sender.firstName, humlinker.sender.lastName]
       .filter(Boolean)
-      .join(' ') || 'Quelqu\'un';
+      .join(' ') || "Quelqu'un";
 
     // Cas 1 : target inscrit -> app uniquement
     if (!humlinker.target.isPlaceholder) {
@@ -405,7 +537,6 @@ export class MessagesService {
       if (!targetUser) return;
 
       if (humlinker.mirrorId) {
-        // type 'real_message' = message reçu du sender → toujours à gauche dans le chat du target
         await this.chatMessageRepository.create({
           humhlinkerId: humlinker.mirrorId,
           role: 'user',
@@ -468,4 +599,3 @@ export class MessagesService {
   }
 }
 
-// }
