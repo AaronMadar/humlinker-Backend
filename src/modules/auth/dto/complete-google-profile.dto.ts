@@ -1,28 +1,13 @@
-/**
- * CompleteGoogleProfileDto
- *
- * Données envoyées lors de la complétion du profil Google.
- * Appelé sur POST /auth/complete-profile après le login Google
- * si l'utilisateur est nouveau (requiresProfileCompletion: true).
- *
- * Le front doit avoir au préalable :
- *  1. Vérifié le numéro de téléphone via le flow OTP classique
- *     (POST /auth/send-otp/phone → POST /auth/verify-otp)
- *  2. Envoyé cet objet avec le JWT Google temporaire dans le header Authorization
- *
- * language : langue choisie par l'utilisateur dans l'interface.
- */
 import { IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class CompleteGoogleProfileDto {
-  @IsString()
-  @IsNotEmpty()
-  username!: string;
-
+  @ApiProperty({ example: '+33612345678', description: 'Numéro de téléphone vérifié via OTP (format E.164).' })
   @IsString()
   @IsNotEmpty()
   phoneNumber!: string;
 
+  @ApiProperty({ example: 'fr', description: "Code de langue BCP-47 (ex: 'fr', 'en', 'es')." })
   @IsString()
   @IsNotEmpty()
   language!: string;

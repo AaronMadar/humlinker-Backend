@@ -9,7 +9,7 @@
  *  - Après Send : isSent = true → nouveau draft vide créé automatiquement
  *  - Le realMessage n'est JAMAIS exposé au sender (filtré côté service)
  */
-import type { Draft } from '../../humlinker/entities';
+import type { Draft } from '@/modules/humlinker/entities';
 
 export const DRAFT_REPOSITORY = Symbol('DRAFT_REPOSITORY');
 

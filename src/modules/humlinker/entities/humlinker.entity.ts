@@ -1,60 +1,74 @@
 /**
  * Humlinker entity
  *
- * Représente un humlinker — l'espace de communication AI entre deux personnes.
- * Chaque humlinker a un miroir côté destinataire (mirrorId).
+ * Represente un humlinker - l'espace de communication AI entre deux personnes.
+ * Chaque humlinker a un miroir cote destinataire (mirrorId).
  *
- * ─── Statuts ───────────────────────────────────────────────────────────────
- *  pending  : créé, aucun message encore envoyé au destinataire
- *  active   : au moins un message a été envoyé
- *  archived : archivé par l'utilisateur (masqué de la liste principale)
- *  blocked  : bloqué — les deux côtés (humlinker + mirror) sont figés
+ * Statuts :
+ *  pending  : cree, aucun message encore envoye au destinataire
+ *  active   : au moins un message a ete envoye
+ *  archived : archive par l'utilisateur (masque de la liste principale)
+ *  blocked  : bloque - les deux cotes (humlinker + mirror) sont figes
+ *
+ * Snapshots :
+ *  sender / target : copie des donnees du profil au moment de la creation.
+ *  Permet d'acceder a toutes les infos (nom, langue, photo...) sans fetch
+ *  supplementaire. Mis a jour quand un placeholder cree son vrai compte.
  */
 
 export type HumlinkerStatus = 'pending' | 'active' | 'archived' | 'blocked';
 
-export type HumlinkerChannel = 'app' | 'sms' | 'whatsapp' | 'email';
+export type HumlinkerChannel = 'app' | 'email';
+
+export interface HumlinkerParticipant {
+  userId: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  language: string;
+  gender: 'male' | 'female' | 'other' | null;
+  profilePicture: string | null;
+  isPlaceholder: boolean;
+}
 
 export interface Humlinker {
   _id: string;
 
-  /** Utilisateur qui a créé le humlinker */
+  /**
+   * IDs conserves pour les FK en base et les lookups directs.
+   * Les donnees completes sont dans les snapshots sender/target.
+   */
   senderId: string;
-  /** Utilisateur destinataire (réel ou placeholder) */
   targetId: string;
 
   /**
-   * ID du humlinker miroir (côté target).
-   * Null lors de la création, mis à jour juste après la création du mirror.
+   * ID du humlinker miroir (cote target).
+   * Null lors de la creation, mis a jour juste apres la creation du mirror.
    */
   mirrorId: string | null;
 
   status: HumlinkerStatus;
-  /** userId de la personne qui a bloqué (null si non bloqué) */
+  /** userId de la personne qui a bloque (null si non bloque) */
   blockedBy: string | null;
 
-  /** Canal de communication choisi par le créateur */
+  /** Canal de communication choisi par le createur */
   communicationChannel: HumlinkerChannel;
 
-  /** Nom du contact tel que saisi par le créateur */
+  /**
+   * Nom affiche du target tel que saisi par le createur.
+   * Independant du vrai nom dans le snapshot - chaque sender a son propre label.
+   */
   targetContactName: string;
-  /** Email brut saisi par le créateur */
-  targetContactEmail: string | null;
-  /** Téléphone normalisé E.164 saisi par le créateur */
-  targetContactPhone: string | null;
 
-  /** Type de relation décrit par le créateur (ex: "collègue", "ami") */
+  /** Type de relation decrit par le createur (ex: "collegue", "ami") */
   relationshipType: string;
-  /** Titre donné au humlinker */
+  /** Titre donne au humlinker */
   title: string;
 
-  /** Langue du créateur */
-  creatorLanguage: string;
-  /** Langue du destinataire (connue si target déjà inscrit, sinon null) */
-  targetLanguage: string | null;
-
-  /** SID de la Conversation Twilio pour le routing des webhooks entrants */
-  twilioConversationSid: string | null;
+  /** Snapshot complet du sender au moment de la creation */
+  sender: HumlinkerParticipant;
+  /** Snapshot complet du target au moment de la creation */
+  target: HumlinkerParticipant;
 
   lastActivityAt: Date;
   createdAt: Date;

@@ -1,77 +1,50 @@
-/**
- * HumlinkerController
- *
- * Expose les routes de gestion des humlinkers.
- * Toutes ces routes nécessitent un JWT valide.
- *
- * ─── Routes ────────────────────────────────────────────────────────────────
- *
- *  POST   /api/v1/humlinkers                → Créer un humlinker
- *  GET    /api/v1/humlinkers                → Liste de mes humlinkers (lazy load)
- *  GET    /api/v1/humlinkers/:id            → Détail d'un humlinker
- *  PATCH  /api/v1/humlinkers/:id/archive    → Archiver
- *  PATCH  /api/v1/humlinkers/:id/unarchive  → Désarchiver
- *  PATCH  /api/v1/humlinkers/:id/block      → Bloquer (les deux côtés)
- *  POST   /api/v1/humlinkers/sync-contacts  → Synchroniser les contacts téléphone
- *  GET    /api/v1/humlinkers/contacts       → Récupérer les contacts (déjà syncés)
- *
- * ───────────────────────────────────────────────────────────────────────────
- */
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  ParseUUIDPipe,
-  Patch,
-  Post,
-  Query,
-} from '@nestjs/common';
-import type { ApiResponse } from '../../common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
+import type { ApiResponse as AppApiResponse } from '../../common';
 import { CurrentUser } from '../../decorators';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 import type { Humlinker } from './entities';
-import type { Contact } from './entities';
-import { CreateHumlinkerDto, SyncContactsDto } from './dto';
+import { CreateHumlinkerDto } from './dto';
 import { HumlinkerService } from './humlinker.service';
-import { ContactsService, type SyncContactsResult } from './services/contacts.service';
 
+@ApiTags('Humlinkers')
+@ApiBearerAuth()
 @Controller('humlinkers')
 export class HumlinkerController {
   constructor(
     private readonly humlinkerService: HumlinkerService,
-    private readonly contactsService: ContactsService,
   ) {}
 
-  // ─── Humlinkers ───────────────────────────────────────────────────────────
-
-  /**
-   * Crée un humlinker entre l'utilisateur connecté et un target.
-   * Crée également le humlinker miroir côté destinataire.
-   */
   @Post()
+  @ApiOperation({
+    summary: 'Créer un humlinker',
+    description:
+      "Crée un humlinker entre l'utilisateur connecté (sender) et un target. Crée automatiquement le humlinker miroir côté destinataire. Si le target n'est pas inscrit, un compte placeholder est créé.",
+  })
+  @ApiResponse({ status: 201, description: 'Humlinker créé (+ mirror côté target).' })
+  @ApiResponse({ status: 400, description: 'Aucun identifiant target fourni, ou numéro de téléphone invalide.' })
+  @ApiResponse({ status: 409, description: 'Un humlinker existe déjà avec ce contact.' })
   async createHumlinker(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CreateHumlinkerDto,
-  ): Promise<ApiResponse<Humlinker>> {
+  ): Promise<AppApiResponse<Humlinker>> {
     const data = await this.humlinkerService.createHumlinker(user.userId, dto);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
-  /**
-   * Retourne tous les humlinkers de l'utilisateur (sender OU target),
-   * triés par lastActivityAt DESC (style WhatsApp).
-   *
-   * Query params :
-   *  - limit  : nombre de résultats par page (défaut 30)
-   *  - offset : pagination offset (défaut 0)
-   */
   @Get()
+  @ApiOperation({
+    summary: 'Mes humlinkers',
+    description: "Retourne tous les humlinkers où l'utilisateur est sender ou target, triés par `lastActivityAt` DESC (style liste de conversations WhatsApp).",
+  })
+  @ApiQuery({ name: 'limit', required: false, description: 'Nombre de résultats par page (défaut 30).', example: 30 })
+  @ApiQuery({ name: 'offset', required: false, description: 'Offset pour la pagination (défaut 0).', example: 0 })
+  @ApiResponse({ status: 200, description: 'Liste des humlinkers.' })
   async getMyHumlinkers(
     @CurrentUser() user: AuthenticatedUser,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
-  ): Promise<ApiResponse<Humlinker[]>> {
+  ): Promise<AppApiResponse<Humlinker[]>> {
     const data = await this.humlinkerService.getMyHumlinkers(user.userId, {
       limit: limit ? parseInt(limit, 10) : undefined,
       offset: offset ? parseInt(offset, 10) : undefined,
@@ -79,94 +52,69 @@ export class HumlinkerController {
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
-  /**
-   * Retourne les contacts déjà synchronisés (sans refaire la sync complète).
-   * Utile pour recharger l'écran sans ré-envoyer tous les contacts.
-   *
-   * IMPORTANT : cette route doit être AVANT /:id pour éviter que 'contacts'
-   * soit capté comme un UUID par ParseUUIDPipe.
-   */
-  @Get('contacts')
-  async getContacts(
-    @CurrentUser() user: AuthenticatedUser,
-  ): Promise<ApiResponse<SyncContactsResult>> {
-    const data = await this.contactsService.getContacts(user.userId);
-    return { success: true, data, timestamp: new Date().toISOString() };
-  }
-
-  /**
-   * Retourne le détail d'un humlinker.
-   * Les messages du chat sont chargés séparément via GET /humlinkers/:id/messages.
-   */
   @Get(':id')
+  @ApiOperation({
+    summary: 'Détail d\'un humlinker',
+    description: "Retourne le détail d'un humlinker (snapshots sender/target, canal, statut). Les messages du chat sont chargés séparément via `GET /humlinkers/:id/messages`.",
+  })
+  @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiResponse({ status: 200, description: 'Humlinker retourné.' })
+  @ApiResponse({ status: 403, description: "L'utilisateur n'est pas participant de ce humlinker." })
+  @ApiResponse({ status: 404, description: 'Humlinker introuvable.' })
   async getHumlinkerById(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<ApiResponse<Humlinker>> {
+  ): Promise<AppApiResponse<Humlinker>> {
     const data = await this.humlinkerService.getHumlinkerById(id, user.userId);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
-  /**
-   * Archive un humlinker (le masque de la liste principale).
-   * Accessible via la liste archivée. Le mirror n'est pas affecté.
-   */
   @Patch(':id/archive')
+  @ApiOperation({
+    summary: 'Archiver un humlinker',
+    description: "Masque le humlinker de la liste principale. Accessible via la liste archivée. Le mirror côté target n'est pas affecté.",
+  })
+  @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiResponse({ status: 200, description: 'Humlinker archivé.' })
+  @ApiResponse({ status: 400, description: 'Humlinker déjà archivé ou bloqué.' })
   async archiveHumlinker(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<ApiResponse<Humlinker>> {
+  ): Promise<AppApiResponse<Humlinker>> {
     const data = await this.humlinkerService.archiveHumlinker(id, user.userId);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
-  /**
-   * Désarchive un humlinker (le remet dans la liste principale).
-   */
   @Patch(':id/unarchive')
+  @ApiOperation({
+    summary: 'Désarchiver un humlinker',
+    description: "Remet le humlinker dans la liste principale active.",
+  })
+  @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiResponse({ status: 200, description: 'Humlinker désarchivé.' })
+  @ApiResponse({ status: 400, description: "Le humlinker n'est pas archivé." })
   async unarchiveHumlinker(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<ApiResponse<Humlinker>> {
+  ): Promise<AppApiResponse<Humlinker>> {
     const data = await this.humlinkerService.unarchiveHumlinker(id, user.userId);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
-  /**
-   * Bloque un humlinker ET son mirror.
-   * Les deux côtés sont figés — status 'blocked', plus aucun message possible.
-   */
   @Patch(':id/block')
+  @ApiOperation({
+    summary: 'Bloquer un humlinker',
+    description: "Bloque le humlinker ET son mirror côté target. Les deux côtés passent en statut `blocked` — plus aucun message ne peut être envoyé.",
+  })
+  @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiResponse({ status: 200, description: 'Humlinker bloqué (+ mirror).' })
+  @ApiResponse({ status: 400, description: 'Humlinker déjà bloqué.' })
   async blockHumlinker(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<ApiResponse<null>> {
+  ): Promise<AppApiResponse<null>> {
     await this.humlinkerService.blockHumlinker(id, user.userId);
-    return {
-      success: true,
-      data: null,
-      message: 'Humlinker bloqué.',
-      timestamp: new Date().toISOString(),
-    };
-  }
-
-  // ─── Contacts ─────────────────────────────────────────────────────────────
-
-  /**
-   * Synchronise les contacts téléphone de l'utilisateur.
-   * Le front envoie la liste brute des contacts → normalisation E.164 + matching.
-   *
-   * Retourne :
-   *  - matched   : contacts déjà inscrits sur Humlinker (en haut de liste)
-   *  - unmatched : contacts non inscrits (avec option "Inviter" côté front)
-   */
-  @Post('sync-contacts')
-  async syncContacts(
-    @CurrentUser() user: AuthenticatedUser,
-    @Body() dto: SyncContactsDto,
-  ): Promise<ApiResponse<SyncContactsResult>> {
-    const data = await this.contactsService.syncContacts(user.userId, dto);
-    return { success: true, data, timestamp: new Date().toISOString() };
+    return { success: true, data: null, message: 'Humlinker bloqué.', timestamp: new Date().toISOString() };
   }
 
 }

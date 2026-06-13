@@ -16,12 +16,9 @@ import { Module, forwardRef } from '@nestjs/common';
 import { UsersModule } from '../users/users.module';
 import { HumlinkerController } from './humlinker.controller';
 import { HumlinkerService } from './humlinker.service';
-import { ContactsService } from './services/contacts.service';
 import {
   PrismaHumlinkerRepository,
-  PrismaContactsRepository,
   HUMLINKER_REPOSITORY,
-  CONTACTS_REPOSITORY,
 } from './repositories';
 
 @Module({
@@ -29,18 +26,16 @@ import {
   controllers: [HumlinkerController],
   providers: [
     HumlinkerService,
-    ContactsService,
     PrismaHumlinkerRepository,
-    PrismaContactsRepository,
     {
       provide: HUMLINKER_REPOSITORY,
       useExisting: PrismaHumlinkerRepository,
     },
-    {
-      provide: CONTACTS_REPOSITORY,
-      useExisting: PrismaContactsRepository,
-    },
   ],
-  exports: [HumlinkerService, ContactsService],
+  exports: [
+    HumlinkerService,
+    HUMLINKER_REPOSITORY,
+    PrismaHumlinkerRepository,
+  ],
 })
 export class HumlinkerModule {}

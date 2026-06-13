@@ -1,20 +1,21 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { API_PREFIX, API_VERSION } from './common';
 import { APP_CONFIG } from './config';
 import configuration from './config/configuration';
 import { HttpExceptionFilter } from './filters';
 import { LoggingInterceptor } from './interceptors';
+import { NotificationsService } from './modules/notifications/notifications.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const config = app.get<ReturnType<typeof configuration>>(APP_CONFIG);
 
-  // ─── CORS ─────────────────────────────────────────────────────────────────
-  // En production, remplacer '*' par le domaine exact du front (ex: https://humlinker.com)
+  // --- CORS ---
   app.enableCors({
     origin: config.app.env === 'production'
       ? (process.env.FRONTEND_URL ?? false)
@@ -24,29 +25,76 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // ─── WebSocket (Socket.io) ─────────────────────────────────────────────────
-  // IoAdapter est requis pour que @nestjs/websockets fonctionne avec socket.io.
-  // Sans ça, NestJS utilise 'ws' par défaut et le gateway ne répond pas.
+  // --- WebSocket (Socket.io) ---
   app.useWebSocketAdapter(new IoAdapter(app));
 
-  // ─── Global prefix ────────────────────────────────────────────────────────
+  // --- Global prefix ---
   app.setGlobalPrefix(`${API_PREFIX}/${API_VERSION}`);
 
-  // ─── Validation ───────────────────────────────────────────────────────────
+  // --- Validation ---
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true,          // strip champs non déclarés dans le DTO
-      forbidNonWhitelisted: true, // 400 si champs inconnus envoyés
-      transform: true,          // cast automatique (string → number pour @Query, etc.)
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
     }),
   );
 
-  // ─── Exception filter + Logging ───────────────────────────────────────────
+  // --- Exception filter + Logging ---
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new LoggingInterceptor());
 
+  // --- Firebase ---
+  const notificationsService = app.get(NotificationsService);
+  notificationsService.initFirebase(config.firebase);
+
+  // --- Swagger (dev only) ---
+  if (config.app.env !== 'production') {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Humlinker API')
+      .setDescription(
+        '## API Humlinker\n\n' +
+        'Plateforme de communication assistee par IA. Humlinker permet d envoy' +
+        'er des messages reformules, polis et diplomatiques a vos contacts via ' +
+        'differents canaux (app, SMS, WhatsApp, email).\n\n' +
+        '### Flow inscription\n' +
+        '1. `POST /auth/send-otp/email` - envoyer OTP email\n' +
+        '2. `POST /auth/verify-otp` - verifier OTP email\n' +
+        '3. `POST /auth/send-otp/phone` - envoyer OTP telephone\n' +
+        '4. `POST /auth/verify-otp` - verifier OTP telephone\n' +
+        '5. `POST /auth/register` - creer le compte\n\n' +
+        '### Auth\nToutes les routes protegees necessitent `Authorization: Bearer <token>`.',
+      )
+      .setVersion('1.0')
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'JWT retourne par /auth/login, /auth/register ou /auth/google',
+        },
+      )
+      .addTag('Auth', 'Inscription, connexion, OTP et reinitialisation')
+      .addTag('Users', 'Gestion du profil utilisateur')
+      .addTag('Humlinkers', 'Creation et gestion des humlinkers et contacts')
+      .addTag('Messages', 'Chat IA et envoi des messages aux destinataires')
+      .build();
+
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('docs', app, document, {
+      swaggerOptions: {
+        persistAuthorization: true,
+        tagsSorter: 'alpha',
+        operationsSorter: 'alpha',
+      },
+      customSiteTitle: 'Humlinker API Docs',
+    });
+
+    console.log('Swagger: http://localhost:' + config.app.port + '/docs');
+  }
+
   await app.listen(config.app.port);
-  console.log(`🚀 Server is running on http://localhost:${config.app.port}/api/v1`);
+  console.log('Server: http://localhost:' + config.app.port + '/api/v1');
 }
 
 bootstrap();

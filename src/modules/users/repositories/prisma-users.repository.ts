@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { User as PrismaUser } from '@prisma/client';
-import { PrismaService } from '../../../database';
+import { PrismaService } from '@/database';
 import type { User } from '../entities';
 import type {
   CreateUserData,
@@ -8,10 +8,6 @@ import type {
   UsersRepository,
 } from './users.repository';
 
-/**
- * Convertit un enregistrement Prisma en entité User du domaine.
- * Permet d'isoler le reste de l'app de Prisma.
- */
 function toUser(record: PrismaUser): User {
   return {
     _id: record.id,
@@ -19,7 +15,7 @@ function toUser(record: PrismaUser): User {
     gender: record.gender,
     firstName: record.firstName,
     lastName: record.lastName,
-    username: record.username,
+    pin: record.pin,
     email: record.email,
     phoneNumber: record.phoneNumber,
     language: record.language,
@@ -30,8 +26,6 @@ function toUser(record: PrismaUser): User {
     isPhoneVerified: record.isPhoneVerified,
     isPlaceholder: record.isPlaceholder,
     placeholderSource: record.placeholderSource,
-    previousEmails: record.previousEmails,
-    previousPhoneNumbers: record.previousPhoneNumbers,
     fcmToken: record.fcmToken,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -55,8 +49,10 @@ export class PrismaUsersRepository implements UsersRepository {
     return record ? toUser(record) : null;
   }
 
-  async findByUsername(username: string): Promise<User | null> {
-    const record = await this.prisma.user.findUnique({ where: { username } });
+  async findByPin(pin: string): Promise<User | null> {
+    const record = await this.prisma.user.findUnique({
+      where: { pin: pin.toUpperCase() },
+    });
     return record ? toUser(record) : null;
   }
 
@@ -65,38 +61,13 @@ export class PrismaUsersRepository implements UsersRepository {
     return record ? toUser(record) : null;
   }
 
-  /**
-   * Recherche par email, username ou téléphone actuel.
-   * Utilisé lors de la connexion.
-   */
-  async findByEmailOrUsernameOrPhone(identifier: string): Promise<User | null> {
+  async findByEmailOrPhone(identifier: string): Promise<User | null> {
     const normalized = identifier.trim();
     const record = await this.prisma.user.findFirst({
       where: {
         OR: [
           { email: normalized.toLowerCase() },
-          { username: normalized },
           { phoneNumber: normalized },
-        ],
-      },
-    });
-    return record ? toUser(record) : null;
-  }
-
-  /**
-   * Recherche un user dont l'email ou le téléphone apparaît dans
-   * previousEmails ou previousPhoneNumbers.
-   *
-   * Utilisé pour la synchronisation des contacts téléphone :
-   * un contact peut avoir l'ancien numéro ou email d'un utilisateur Humlinker.
-   */
-  async findByPreviousContact(contact: string): Promise<User | null> {
-    const normalized = contact.trim().toLowerCase();
-    const record = await this.prisma.user.findFirst({
-      where: {
-        OR: [
-          { previousEmails: { has: normalized } },
-          { previousPhoneNumbers: { has: normalized } },
         ],
       },
     });
@@ -110,7 +81,7 @@ export class PrismaUsersRepository implements UsersRepository {
         gender: data.gender ?? null,
         firstName: data.firstName ?? null,
         lastName: data.lastName ?? null,
-        username: data.username ?? null,
+        pin: data.pin,
         email: data.email?.toLowerCase() ?? null,
         phoneNumber: data.phoneNumber ?? null,
         language: data.language,
@@ -121,20 +92,11 @@ export class PrismaUsersRepository implements UsersRepository {
         isPhoneVerified: data.isPhoneVerified ?? false,
         isPlaceholder: data.isPlaceholder ?? false,
         placeholderSource: data.placeholderSource ?? null,
-        previousEmails: data.previousEmails ?? [],
-        previousPhoneNumbers: data.previousPhoneNumbers ?? [],
       },
     });
     return toUser(record);
   }
 
-  /**
-   * Met à jour un user.
-   * Normalise l'email en minuscules si fourni.
-   *
-   * Retourne null si le user n'existe pas ou si Prisma échoue
-   * (contrainte unique violée, etc.).
-   */
   async update(id: string, data: UpdateUserData): Promise<User | null> {
     try {
       const record = await this.prisma.user.update({
@@ -155,34 +117,5 @@ export class PrismaUsersRepository implements UsersRepository {
 
   async updateLastLoginAt(id: string, date: Date): Promise<User | null> {
     return this.update(id, { lastLoginAt: date });
-  }
-
-  /**
-   * Recherche des utilisateurs inscrits (non-placeholder) par username,
-   * prénom, nom, email ou téléphone (contains, insensible à la casse).
-   * Exclut l'appelant et les placeholders.
-   */
-  async searchUsers(
-    query: string,
-    excludeUserId: string,
-    limit: number,
-  ): Promise<User[]> {
-    const q = query.trim();
-    const records = await this.prisma.user.findMany({
-      where: {
-        isPlaceholder: false,
-        id: { not: excludeUserId },
-        OR: [
-          { username: { contains: q, mode: 'insensitive' } },
-          { firstName: { contains: q, mode: 'insensitive' } },
-          { lastName: { contains: q, mode: 'insensitive' } },
-          { email: { contains: q, mode: 'insensitive' } },
-          { phoneNumber: { contains: q } },
-        ],
-      },
-      take: limit,
-      orderBy: { username: 'asc' },
-    });
-    return records.map(toUser);
   }
 }

@@ -1,17 +1,10 @@
 /**
  * PrismaHumlinkerRepository
- *
- * Implémentation Prisma du HumlinkerRepository.
- * Convertit les enregistrements Prisma en entités Humlinker du domaine.
  */
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../database';
-import type { Humlinker } from '../entities';
-import type {
-  CreateHumlinkerData,
-  HumlinkerRepository,
-  UpdateHumlinkerData,
-} from './humlinker.repository';
+import { PrismaService } from '@/database';
+import type { Humlinker, HumlinkerParticipant } from '../entities';
+import type { CreateHumlinkerData, HumlinkerRepository, UpdateHumlinkerData } from './humlinker.repository';
 
 const DEFAULT_PAGE_SIZE = 30;
 
@@ -19,46 +12,42 @@ const DEFAULT_PAGE_SIZE = 30;
 export class PrismaHumlinkerRepository implements HumlinkerRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  // ─── Lecture ──────────────────────────────────────────────────────────────
-
   async findById(id: string): Promise<Humlinker | null> {
     const row = await this.prisma.humlinker.findUnique({ where: { id } });
-    return row ? this.toHumlinker(row) : null;
+    return row ? this.toHumlinker(row as never) : null;
   }
 
-  async findAllByUserId(
-    userId: string,
-    options: { limit?: number; offset?: number } = {},
-  ): Promise<Humlinker[]> {
+  async findAllByUserId(userId: string, options: { limit?: number; offset?: number } = {}): Promise<Humlinker[]> {
     const { limit = DEFAULT_PAGE_SIZE, offset = 0 } = options;
-
     const rows = await this.prisma.humlinker.findMany({
-      where: {
-        OR: [{ senderId: userId }, { targetId: userId }],
-        // Exclure les statuts supprimés si besoin futur
-      },
+      where: { senderId: userId },
       orderBy: { lastActivityAt: 'desc' },
       take: limit,
       skip: offset,
     });
-
-    return rows.map(this.toHumlinker);
+    return rows.map((r) => this.toHumlinker(r as never));
   }
 
-  async findBySenderAndTarget(
-    senderId: string,
-    targetId: string,
-  ): Promise<Humlinker | null> {
+  async findBySenderAndTarget(senderId: string, targetId: string): Promise<Humlinker | null> {
     const row = await this.prisma.humlinker.findUnique({
       where: { senderId_targetId: { senderId, targetId } },
     });
-    return row ? this.toHumlinker(row) : null;
+    return row ? this.toHumlinker(row as never) : null;
   }
 
-  // ─── Écriture ─────────────────────────────────────────────────────────────
+  async findAllByTargetId(targetId: string): Promise<Humlinker[]> {
+    const rows = await this.prisma.humlinker.findMany({ where: { targetId } });
+    return rows.map((r) => this.toHumlinker(r as never));
+  }
+
+  async findAllBySenderId(senderId: string): Promise<Humlinker[]> {
+    const rows = await this.prisma.humlinker.findMany({ where: { senderId } });
+    return rows.map((r) => this.toHumlinker(r as never));
+  }
 
   async create(data: CreateHumlinkerData): Promise<Humlinker> {
-    const row = await this.prisma.humlinker.create({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row = await (this.prisma.humlinker.create as any)({
       data: {
         senderId: data.senderId,
         targetId: data.targetId,
@@ -66,12 +55,10 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
         status: data.status ?? 'pending',
         communicationChannel: data.communicationChannel,
         targetContactName: data.targetContactName,
-        targetContactEmail: data.targetContactEmail ?? null,
-        targetContactPhone: data.targetContactPhone ?? null,
         relationshipType: data.relationshipType,
         title: data.title,
-        creatorLanguage: data.creatorLanguage,
-        targetLanguage: data.targetLanguage ?? null,
+        senderSnapshot: data.senderSnapshot,
+        targetSnapshot: data.targetSnapshot,
         lastActivityAt: new Date(),
       },
     });
@@ -86,43 +73,24 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
           ...(data.mirrorId !== undefined && { mirrorId: data.mirrorId }),
           ...(data.status !== undefined && { status: data.status }),
           ...(data.blockedBy !== undefined && { blockedBy: data.blockedBy }),
-          ...(data.targetLanguage !== undefined && { targetLanguage: data.targetLanguage }),
           ...(data.lastActivityAt !== undefined && { lastActivityAt: data.lastActivityAt }),
-          ...(data.twilioConversationSid !== undefined && { twilioConversationSid: data.twilioConversationSid }),
+          ...(data.communicationChannel !== undefined && { communicationChannel: data.communicationChannel }),
+          ...(data.senderSnapshot !== undefined && { senderSnapshot: data.senderSnapshot as never }),
+          ...(data.targetSnapshot !== undefined && { targetSnapshot: data.targetSnapshot as never }),
         },
       });
-      return this.toHumlinker(row);
+      return this.toHumlinker(row as never);
     } catch {
       return null;
     }
   }
 
-  async findByTwilioConversationSid(sid: string): Promise<Humlinker | null> {
-    const row = await this.prisma.humlinker.findFirst({
-      where: { twilioConversationSid: sid },
-    });
-    return row ? this.toHumlinker(row) : null;
-  }
-
-  async blockBoth(
-    humhlinkerId: string,
-    mirrorId: string,
-    blockedBy: string,
-  ): Promise<void> {
-    // Transaction pour garantir que les deux sont bloqués ou aucun
+  async blockBoth(humhlinkerId: string, mirrorId: string, blockedBy: string): Promise<void> {
     await this.prisma.$transaction([
-      this.prisma.humlinker.update({
-        where: { id: humhlinkerId },
-        data: { status: 'blocked', blockedBy },
-      }),
-      this.prisma.humlinker.update({
-        where: { id: mirrorId },
-        data: { status: 'blocked', blockedBy },
-      }),
+      this.prisma.humlinker.update({ where: { id: humhlinkerId }, data: { status: 'blocked', blockedBy } }),
+      this.prisma.humlinker.update({ where: { id: mirrorId }, data: { status: 'blocked', blockedBy } }),
     ]);
   }
-
-  // ─── Mapper ───────────────────────────────────────────────────────────────
 
   private toHumlinker(row: {
     id: string;
@@ -133,13 +101,10 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
     blockedBy: string | null;
     communicationChannel: string;
     targetContactName: string;
-    targetContactEmail: string | null;
-    targetContactPhone: string | null;
     relationshipType: string;
     title: string;
-    creatorLanguage: string;
-    targetLanguage: string | null;
-    twilioConversationSid: string | null;
+    senderSnapshot: unknown;
+    targetSnapshot: unknown;
     lastActivityAt: Date;
     createdAt: Date;
     updatedAt: Date;
@@ -153,13 +118,10 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       blockedBy: row.blockedBy,
       communicationChannel: row.communicationChannel as Humlinker['communicationChannel'],
       targetContactName: row.targetContactName,
-      targetContactEmail: row.targetContactEmail,
-      targetContactPhone: row.targetContactPhone,
       relationshipType: row.relationshipType,
       title: row.title,
-      creatorLanguage: row.creatorLanguage,
-      targetLanguage: row.targetLanguage,
-      twilioConversationSid: row.twilioConversationSid,
+      sender: row.senderSnapshot as HumlinkerParticipant,
+      target: row.targetSnapshot as HumlinkerParticipant,
       lastActivityAt: row.lastActivityAt,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

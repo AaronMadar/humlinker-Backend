@@ -4,7 +4,7 @@
  * Gère le stockage et la lecture des messages dans le chat d'un humlinker.
  * Lazy load style WhatsApp : on charge les 30 derniers, scroll vers le haut pour plus.
  */
-import type { ChatMessage } from '../../humlinker/entities';
+import type { ChatMessage } from '@/modules/humlinker/entities';
 
 export const CHAT_MESSAGE_REPOSITORY = Symbol('CHAT_MESSAGE_REPOSITORY');
 

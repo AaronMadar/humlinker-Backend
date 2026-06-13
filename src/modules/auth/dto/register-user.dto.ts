@@ -1,17 +1,3 @@
-/**
- * RegisterUserDto
- *
- * Données attendues lors de l'inscription classique (email + téléphone + mot de passe).
- *
- * IMPORTANT : email, phoneNumber et username sont OBLIGATOIRES.
- * Avant d'appeler cette route, le front doit avoir vérifié l'email et le téléphone
- * via le flow OTP (POST /auth/send-otp/email → POST /auth/verify-otp).
- * Le backend vérifie côté serveur que les flags Redis "verified" sont présents
- * pour bloquer les appels directs API (Postman, curl...).
- *
- * Note : firstName, lastName et gender sont optionnels à l'inscription.
- * L'utilisateur peut les renseigner plus tard dans son profil.
- */
 import {
   IsEmail,
   IsEnum,
@@ -20,40 +6,44 @@ import {
   IsString,
   MinLength,
 } from 'class-validator';
-import type { UserGender } from '../../users/entities';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import type { UserGender } from '@/modules/users/entities';
 
 const GENDERS: UserGender[] = ['male', 'female', 'other'];
 
 export class RegisterUserDto {
+  @ApiProperty({ example: 'john.doe@gmail.com', description: 'Email vérifié via OTP.' })
   @IsEmail()
   email!: string;
 
-  @IsString()
-  @IsNotEmpty()
-  username!: string;
-
+  @ApiProperty({ example: '+33612345678', description: 'Numéro de téléphone vérifié via OTP (format E.164).' })
   @IsString()
   @IsNotEmpty()
   phoneNumber!: string;
 
+  @ApiProperty({ example: 'Motdepasse1!', description: 'Mot de passe (min 8 caractères).', minLength: 8 })
   @IsString()
   @MinLength(8)
   password!: string;
 
+  @ApiProperty({ example: 'fr', description: "Code de langue BCP-47 (ex: 'fr', 'en', 'es')." })
   @IsString()
   @IsNotEmpty()
   language!: string;
 
+  @ApiPropertyOptional({ example: 'John', description: 'Prénom (optionnel).' })
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   firstName?: string;
 
+  @ApiPropertyOptional({ example: 'Doe', description: 'Nom de famille (optionnel).' })
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   lastName?: string;
 
+  @ApiPropertyOptional({ enum: GENDERS, example: 'male', description: 'Genre (optionnel).' })
   @IsOptional()
   @IsEnum(GENDERS)
   gender?: UserGender;

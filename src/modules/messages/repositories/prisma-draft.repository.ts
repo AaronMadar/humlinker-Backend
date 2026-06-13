@@ -4,8 +4,8 @@
  * Implémentation Prisma du DraftRepository.
  */
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../database';
-import type { Draft } from '../../humlinker/entities';
+import { PrismaService } from '@/database';
+import type { Draft } from '@/modules/humlinker/entities';
 import type {
   CreateDraftData,
   DraftRepository,

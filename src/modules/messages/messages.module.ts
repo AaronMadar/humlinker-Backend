@@ -1,27 +1,7 @@
-/**
- * MessagesModule
- *
- * Gère tout le cycle de vie du chat à l'intérieur des humlinkers.
- *
- * ─── Providers ────────────────────────────────────────────────────────────
- *  MessagesService           → logique chat (getChat, sendMessage, sendDraft)
- *  WebhookService            → traitement webhooks Twilio entrants
- *  PrismaChatMessageRepository → stockage des messages chat
- *  PrismaDraftRepository       → stockage des drafts
- *
- * ─── Controllers ─────────────────────────────────────────────────────────
- *  MessagesController  → GET/POST /humlinkers/:id/messages + POST /humlinkers/:id/send
- *  WebhookController   → POST /webhooks/twilio
- *
- * ─── Dépendances ─────────────────────────────────────────────────────────
- *  HumlinkerModule → HumlinkerRepository (accès aux humlinkers)
- *  UsersModule     → UsersRepository (fcmToken, profil)
- *  AiModule        → AiService (@Global — disponible sans import)
- *  NotificationsModule → NotificationsService + HumlinkerGateway (@Global)
- */
 import { Module, forwardRef } from '@nestjs/common';
 import { HumlinkerModule } from '../humlinker/humlinker.module';
 import { UsersModule } from '../users/users.module';
+import { MailModule } from '../../integrations/mail/mail.module';
 import { MessagesController } from './messages.controller';
 import { MessagesService } from './messages.service';
 import { WebhookService } from './services/webhook.service';
@@ -37,6 +17,7 @@ import {
   imports: [
     forwardRef(() => HumlinkerModule),
     forwardRef(() => UsersModule),
+    MailModule,
   ],
   controllers: [MessagesController, WebhookController],
   providers: [

@@ -29,7 +29,9 @@ import {
 import type { ChatMessage, Draft, Humlinker } from '../humlinker/entities';
 import type { AiContext } from '../ai/ai.service';
 import { AiService } from '../ai/ai.service';
-import { SmsService } from '../../integrations/sms/sms.service';
+import { MailService } from '../../integrations/mail/mail.service';
+import { APP_CONFIG } from '../../config';
+import configuration from '../../config/configuration';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   HUMLINKER_REPOSITORY,
@@ -46,7 +48,7 @@ import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 
 const EMPTY_DRAFT_OBJECTIVE = 'Rien à transmettre pour le moment.';
 const CHAT_HISTORY_LIMIT = 30;
-const SENT_DRAFTS_CONTEXT = 3;
+const SENT_DRAFTS_CONTEXT = 10;
 
 export interface ChatResponse {
   /** Messages du chat triés chronologiquement (30 derniers) */
@@ -79,9 +81,11 @@ export class MessagesService {
     @Inject(USERS_REPOSITORY)
     private readonly usersRepository: UsersRepository,
     private readonly aiService: AiService,
-    private readonly smsService: SmsService,
     private readonly notificationsService: NotificationsService,
-  ) {}
+    private readonly mailService: MailService,
+    @Inject(APP_CONFIG)
+    private readonly config: ReturnType<typeof configuration>,
+  ) { }
 
   // ─── Lecture ──────────────────────────────────────────────────────────────
 
@@ -124,16 +128,15 @@ export class MessagesService {
    * Traite un message de l'utilisateur :
    * 1. Sauvegarde le message user en DB
    * 2. Construit le contexte IA (historique + drafts précédents + draft actuel)
-   * 3. Appelle Gemini → reçoit chatResponse + objectiveMessage + realMessage
+   * 3. Appelle Gemini → reçoit objectiveMessage + realMessage
    * 4. Si draftChanged → crée ou met à jour le draft actif
-   * 5. Sauvegarde la réponse IA en DB
-   * 6. Retourne chatResponse + safeDraft mis à jour
+   * 5. Retourne safeDraft mis à jour
    */
   async sendMessage(
     humhlinkerId: string,
     userId: string,
     content: string,
-  ): Promise<{ aiResponse: ChatMessage; activeDraft: SafeDraft }> {
+  ): Promise<{ activeDraft: SafeDraft }> {
     const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
     this.assertNotBlocked(humlinker);
 
@@ -156,9 +159,14 @@ export class MessagesService {
     );
     const currentDraft = await this.draftRepository.findActiveDraft(humhlinkerId);
 
+    const senderName = [humlinker.sender.firstName, humlinker.sender.lastName]
+      .filter(Boolean)
+      .join(' ') || 'L\'expéditeur';
+
     const aiContext: AiContext = {
-      senderLanguage: humlinker.creatorLanguage,
-      targetLanguage: humlinker.targetLanguage ?? 'fr',
+      senderName,
+      senderLanguage: humlinker.sender.language,
+      targetLanguage: humlinker.target.language,
       relationshipType: humlinker.relationshipType,
       lastSentDrafts,
       chatHistory,
@@ -191,15 +199,7 @@ export class MessagesService {
       updatedDraft = currentDraft ?? (await this.createEmptyDraft(humhlinkerId, 1));
     }
 
-    // 5. Sauvegarde la réponse IA
-    const aiMessage = await this.chatMessageRepository.create({
-      humhlinkerId,
-      role: 'ai',
-      type: 'text',
-      content: aiResult.chatResponse,
-    });
-
-    return { aiResponse: aiMessage, activeDraft: this.toSafeDraft(updatedDraft) };
+    return { activeDraft: this.toSafeDraft(updatedDraft) };
   }
 
   // ─── Envoi du draft au target ─────────────────────────────────────────────
@@ -283,6 +283,18 @@ export class MessagesService {
     const mirrorHumlinker = await this.humlinkerRepository.findById(mirrorHumhlinkerId);
     if (!mirrorHumlinker) return;
 
+    // ─── Stockage de la réponse du target dans le chat du SENDER ────────────
+    // Quand le target répond, le sender doit voir cette réponse dans son propre
+    // chat (type: 'target_reply') afin que l'IA en tienne compte au prochain message.
+    if (mirrorHumlinker.mirrorId) {
+      await this.chatMessageRepository.create({
+        humhlinkerId: mirrorHumlinker.mirrorId, // chat original du sender
+        role: 'system',
+        type: 'target_reply',
+        content: targetRawMessage,
+      });
+    }
+
     const chatHistory = await this.chatMessageRepository.findByHumlinker(
       mirrorHumhlinkerId,
       { limit: 50 },
@@ -293,9 +305,14 @@ export class MessagesService {
     );
     const currentDraft = await this.draftRepository.findActiveDraft(mirrorHumhlinkerId);
 
+    const mirrorSenderName = [mirrorHumlinker.sender.firstName, mirrorHumlinker.sender.lastName]
+      .filter(Boolean)
+      .join(' ') || 'L\'expéditeur';
+
     const aiResult = await this.aiService.processUserMessage({
-      senderLanguage: mirrorHumlinker.creatorLanguage,
-      targetLanguage: mirrorHumlinker.targetLanguage ?? 'fr',
+      senderName: mirrorSenderName,
+      senderLanguage: mirrorHumlinker.sender.language,
+      targetLanguage: mirrorHumlinker.target.language,
       relationshipType: mirrorHumlinker.relationshipType,
       lastSentDrafts,
       chatHistory,
@@ -319,14 +336,6 @@ export class MessagesService {
         });
       }
     }
-
-    // Réponse IA dans le chat mirror
-    await this.chatMessageRepository.create({
-      humhlinkerId: mirrorHumhlinkerId,
-      role: 'ai',
-      type: 'text',
-      content: aiResult.chatResponse,
-    });
 
     // 3. Notifie le sender original du réel message reçu (realMessage du target)
     // Le sender reçoit directement le realMessage (pas l'objectiveMessage du target)
@@ -373,28 +382,34 @@ export class MessagesService {
   }
 
   /**
-   * Dispatche le realMessage au target selon le canal configuré.
-   * Pour app → WebSocket + FCM (NotificationsService).
-   * Pour SMS/WhatsApp → SmsService.
-   * Pour email → MailService (TODO).
+   * Dispatche le realMessage au target.
+   *
+   * Regle principale :
+   *  - Target inscrit (non-placeholder) -> toujours via l'app (push + mirror),
+   *    quel que soit le communicationChannel configure.
+   *  - Target placeholder (pas de compte) -> SMS ou email one-way avec invitation
+   *    a telecharger Humlinker. Le target ne peut PAS repondre depuis SMS/email.
    */
   private async dispatchToTarget(
     humlinker: Humlinker,
     realMessage: string,
   ): Promise<void> {
-    const { communicationChannel, targetId } = humlinker;
+    const { targetId } = humlinker;
+    const senderName = [humlinker.sender.firstName, humlinker.sender.lastName]
+      .filter(Boolean)
+      .join(' ') || 'Quelqu\'un';
 
-    if (communicationChannel === 'app') {
-      // Le target est sur l'app → WebSocket + FCM
+    // Cas 1 : target inscrit -> app uniquement
+    if (!humlinker.target.isPlaceholder) {
       const targetUser = await this.usersRepository.findById(targetId);
       if (!targetUser) return;
 
-      // Sauvegarde le realMessage reçu dans l'humlinker miroir
       if (humlinker.mirrorId) {
+        // type 'real_message' = message reçu du sender → toujours à gauche dans le chat du target
         await this.chatMessageRepository.create({
           humhlinkerId: humlinker.mirrorId,
-          role: 'user', // vu du côté mirror, c'est un message "reçu" du sender
-          type: 'text',
+          role: 'user',
+          type: 'real_message',
           content: realMessage,
         });
       }
@@ -404,37 +419,29 @@ export class MessagesService {
         targetUser.fcmToken ?? null,
         {
           humhlinkerId: humlinker.mirrorId ?? humlinker._id,
-          senderName: 'Humlinker',
+          senderName,
           messagePreview: realMessage,
         },
       );
       return;
     }
 
-    if (
-      communicationChannel === 'sms' ||
-      communicationChannel === 'whatsapp'
-    ) {
-      const phone = humlinker.targetContactPhone;
-      if (!phone) return;
+    // Cas 2 : target placeholder -> one-way SMS ou email + invitation
+    const downloadUrl = this.config.app.downloadUrl;
+    const { communicationChannel } = humlinker;
 
-      if (humlinker.twilioConversationSid) {
-        // Conversation Twilio établie → le target reçoit le message dans son
-        // thread SMS/WhatsApp existant et sa réponse revient avec le bon SID.
-        await this.smsService.sendConversationMessage(
-          humlinker.twilioConversationSid,
-          realMessage,
-        );
-      } else {
-        // Fallback SMS simple (pas de Conversation établie — ex: erreur Twilio à la création).
-        // La réponse du target NE pourra PAS être routée vers le bon humlinker
-        // si plusieurs humlinkers existent pour ce même numéro.
-        await this.smsService.sendMessage(phone, realMessage);
-      }
+    if (communicationChannel === 'email') {
+      const email = humlinker.target.email;
+      if (!email) return;
+
+      await this.mailService.sendHumlinkerMessage(
+        email,
+        senderName,
+        realMessage,
+        downloadUrl,
+      );
       return;
     }
-
-    // TODO: email channel → MailService
   }
 
   private async createEmptyDraft(
@@ -460,3 +467,5 @@ export class MessagesService {
     };
   }
 }
+
+// }

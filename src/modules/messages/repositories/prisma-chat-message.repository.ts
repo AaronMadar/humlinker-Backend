@@ -5,8 +5,8 @@
  * Les messages sont stockés dans la table chat_messages.
  */
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../../database';
-import type { ChatMessage } from '../../humlinker/entities';
+import { PrismaService } from '@/database';
+import type { ChatMessage } from '@/modules/humlinker/entities';
 import type {
   ChatMessageRepository,
   CreateChatMessageData,
@@ -24,8 +24,6 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
   ): Promise<ChatMessage[]> {
     const { limit = DEFAULT_LIMIT, offset = 0 } = options;
 
-    // On charge DESC (plus récents en premier) pour la pagination,
-    // le service inverse le tableau pour l'affichage chronologique.
     const rows = await this.prisma.chatMessage.findMany({
       where: { humhlinkerId },
       orderBy: { createdAt: 'desc' },
@@ -33,21 +31,20 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
       skip: offset,
     });
 
-    // Réinverser pour ordre chronologique (du plus ancien au plus récent)
-    return rows.reverse().map(this.toChatMessage);
+    return rows.reverse().map((r) => this.toChatMessage(r as never));
   }
 
   async create(data: CreateChatMessageData): Promise<ChatMessage> {
     const row = await this.prisma.chatMessage.create({
       data: {
         humhlinkerId: data.humhlinkerId,
-        role: data.role,
-        type: data.type,
+        role: data.role as never,
+        type: data.type as never,
         content: data.content,
         draftId: data.draftId ?? null,
       },
     });
-    return this.toChatMessage(row);
+    return this.toChatMessage(row as never);
   }
 
   private toChatMessage(row: {

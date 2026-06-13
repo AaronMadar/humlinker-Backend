@@ -1,14 +1,11 @@
-/**
- * UpdateEmailDto
- *
- * Données pour changer l'email depuis le profil.
- * Le front doit avoir vérifié le nouvel email via OTP avant cet appel
- * (POST /auth/send-otp/email → POST /auth/verify-otp).
- * Le backend vérifie le flag Redis verified:email:{newEmail}.
- */
 import { IsEmail } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class UpdateEmailDto {
+  @ApiProperty({
+    example: 'nouveau@gmail.com',
+    description: "Nouvel email — doit avoir été vérifié via OTP avant cet appel.",
+  })
   @IsEmail()
   newEmail!: string;
 }

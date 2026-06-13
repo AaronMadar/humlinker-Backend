@@ -31,9 +31,9 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { MailService } from '../../../integrations/mail/mail.service';
-import { SmsService } from '../../../integrations/sms/sms.service';
-import { RedisService } from '../../../redis/redis.service';
+import { MailService } from '@/integrations/mail/mail.service';
+import { SmsService } from '@/integrations/sms/sms.service';
+import { RedisService } from '@/redis/redis.service';
 
 // Durée de vie du code OTP en secondes (5 minutes)
 const OTP_TTL_SECONDS = 5 * 60;
@@ -91,16 +91,11 @@ export class OtpService {
   }
 
   /**
-   * Génère un OTP, le stocke dans Redis et l'envoie par SMS.
-   * Écrase un éventuel OTP précédent (nouvel envoi = nouveau code).
+   * Génère un OTP, le stocke dans Redis et l'envoie par SMS via Twilio.
    */
   async sendPhoneOtp(phoneNumber: string): Promise<void> {
     const code = this.generateCode();
-    await this.redis.set(
-      this.otpKey('phone', phoneNumber),
-      code,
-      OTP_TTL_SECONDS,
-    );
+    await this.redis.set(this.otpKey('phone', phoneNumber), code, OTP_TTL_SECONDS);
     await this.smsService.sendOtp(phoneNumber, code);
     this.logger.log(`Phone OTP sent to ${phoneNumber}`);
   }

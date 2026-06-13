@@ -12,6 +12,8 @@
  *  text           : message texte standard
  *  draft_snapshot : ancienne version de draft (grisée dans le chat, non interactive)
  *  system         : message système affiché dans le fil de conversation
+ *  target_reply   : réponse brute du target stockée dans le chat du sender
+ *  real_message   : realMessage reçu du sender (affiché à GAUCHE dans le chat du destinataire)
  *
  * ─── Affichage dans le chat (ordre chronologique, style WhatsApp) ──────────
  *  - Messages "user" et "ai" : bulles de conversation normales
@@ -22,7 +24,7 @@
 
 export type ChatMessageRole = 'user' | 'ai' | 'system';
 
-export type ChatMessageType = 'text' | 'draft_snapshot' | 'system';
+export type ChatMessageType = 'text' | 'draft_snapshot' | 'system' | 'target_reply' | 'real_message';
 
 export interface ChatMessage {
   _id: string;

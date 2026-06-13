@@ -35,7 +35,6 @@ export class CreateUserDto {
 
   @IsString()
   @IsNotEmpty()
-  username!: string;
 
   @IsEnum(GENDERS)
   gender!: UserGender;

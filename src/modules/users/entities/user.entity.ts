@@ -10,10 +10,11 @@ export interface User {
   gender: UserGender | null;
   firstName: string | null;
   lastName: string | null;
-  username: string | null;
+  /** PIN unique 8 caractères (style BBM). Généré auto, non modifiable. */
+  pin: string;
   email: string | null;
   phoneNumber: string | null;
-  language: string; // jamais null — même pour un placeholder on prend la langue du créateur du humlinker
+  language: string;
   passwordHash: string | null;
   authProviders: UserAuthProvider[];
   profilePicture: string | null;
@@ -22,13 +23,7 @@ export interface User {
   isPlaceholder: boolean;
   placeholderSource: UserPlaceholderSource;
 
-  // Historique des anciens emails et téléphones.
-  // Utilisé pour la synchro des contacts téléphone :
-  // un contact qui a l'ancien numéro/email d'un utilisateur sera quand même retrouvé.
-  previousEmails: string[];
-  previousPhoneNumbers: string[];
-
-  /** Token FCM pour les push notifications — mis à jour à chaque login */
+  /** Token FCM pour les push notifications */
   fcmToken: string | null;
 
   createdAt: Date;

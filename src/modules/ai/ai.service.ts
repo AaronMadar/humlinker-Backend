@@ -1,27 +1,12 @@
 /**
- * AiService — Intégration Gemini pour Humlinker.
+ * AiService - Integration Gemini pour Humlinker.
  *
- * Responsabilités STRICTES de l'IA :
+ * Responsabilites STRICTES :
  *  1. Reformuler l'intention du sender en message respectueux, clair et humain
- *  2. Produire un objectiveMessage (résumé visible) + realMessage (message final envoyé)
- *  3. Répondre dans le chat UNIQUEMENT sur ce qui touche à la reformulation du message
+ *  2. Produire un objectiveMessage (resume visible) + realMessage (message final envoye)
  *
- * L'IA refuse tout ce qui n'est pas lié à l'écriture du message :
- *  → "Je suis ici uniquement pour retranscrire votre message de façon
- *     respectueuse, claire et humaine."
- *
- * ─── Contexte passé à Gemini ────────────────────────────────────────────────
- *  - Les 3 derniers drafts envoyés (évolution de l'intention)
- *  - L'historique des messages du chat (user + IA) depuis le dernier envoi
- *  - Le draft actif en cours (objectiveMessage uniquement)
- *  - Le nouveau message de l'utilisateur
- *
- * ─── Réponse de Gemini ──────────────────────────────────────────────────────
- *  { chatResponse, objectiveMessage, realMessage, draftChanged }
- *  - chatResponse    : réponse conversationnelle affichée dans le chat
- *  - objectiveMessage: résumé de l'intention (visible par le sender)
- *  - realMessage     : message diplomatique final (JAMAIS montré au sender)
- *  - draftChanged    : true si le draft a été modifié (nouveau contenu à sauvegarder)
+ * Reponse de Gemini :
+ *  { objectiveMessage, realMessage, draftChanged, outOfScope }
  */
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -30,37 +15,30 @@ import configuration from '../../config/configuration';
 import type { ChatMessage, Draft } from '../humlinker/entities';
 
 export interface AiDraftResult {
-  /** Réponse conversationnelle de l'IA dans le chat */
-  chatResponse: string;
-  /** Résumé de l'intention — visible par le sender */
   objectiveMessage: string;
-  /** Message diplomatique final — jamais montré au sender */
   realMessage: string;
-  /** true si le contenu du draft a réellement changé */
   draftChanged: boolean;
 }
 
 export interface AiContext {
-  /** Langue du sender (pour la réponse conversationnelle) */
+  /** Prenom + nom du sender - utilise pour signer le realMessage */
+  senderName: string;
+  /** Langue du sender - pour chatResponse et objectiveMessage */
   senderLanguage: string;
-  /** Langue du target (pour le realMessage) */
+  /** Langue du target - pour le realMessage */
   targetLanguage: string;
-  /** Type de relation (ex: "collègue", "ami") */
+  /** Type de relation (ex: "collegue", "ami") */
   relationshipType: string;
-  /** Les 3 derniers drafts envoyés (contexte historique) */
+  /** Les 10 derniers drafts envoyes (contexte historique) */
   lastSentDrafts: Draft[];
   /** Messages du chat depuis le dernier envoi */
   chatHistory: ChatMessage[];
-  /** Draft actif actuel (objectiveMessage) — null si rien à transmettre */
+  /** Draft actif actuel - null si premier message */
   currentDraft: Draft | null;
-  /** Nouveau message tapé par l'utilisateur */
+  /** Nouveau message tape par l'utilisateur */
   newMessage: string;
 }
 
-const OUT_OF_SCOPE_RESPONSE = {
-  fr: "Je suis ici uniquement pour retranscrire votre message de façon respectueuse, claire et humaine.",
-  en: "I'm here only to transcribe your message respectfully, clearly and humanely.",
-};
 
 @Injectable()
 export class AiService {
@@ -74,7 +52,7 @@ export class AiService {
   ) {
     this.genAI = new GoogleGenerativeAI(this.config.ai.geminiApiKey);
     this.model = this.genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash',
       generationConfig: {
         responseMimeType: 'application/json',
         temperature: 0.4,
@@ -82,39 +60,28 @@ export class AiService {
     });
   }
 
-  /**
-   * Traite un message de l'utilisateur et retourne la réponse de l'IA
-   * avec le draft mis à jour (objectiveMessage + realMessage).
-   */
   async processUserMessage(context: AiContext): Promise<AiDraftResult> {
     const prompt = this.buildPrompt(context);
-
+    console.log("GEMINI KEY =", process.env.GEMINI_API_KEY?.slice(0, 10));
     try {
       const result = await this.model.generateContent(prompt);
       const text = result.response.text();
       const parsed = JSON.parse(text) as {
-        chatResponse: string;
         objectiveMessage: string;
         realMessage: string;
         draftChanged: boolean;
         outOfScope: boolean;
       };
 
-      // Si l'IA détecte une question hors scope → réponse fixe, draft inchangé
       if (parsed.outOfScope) {
         return {
-          chatResponse:
-            OUT_OF_SCOPE_RESPONSE[context.senderLanguage as 'fr' | 'en'] ??
-            OUT_OF_SCOPE_RESPONSE.fr,
-          objectiveMessage:
-            context.currentDraft?.objectiveMessage ?? "Rien à transmettre pour le moment.",
+          objectiveMessage: context.currentDraft?.objectiveMessage ?? "Rien a transmettre pour le moment.",
           realMessage: context.currentDraft?.realMessage ?? '',
           draftChanged: false,
         };
       }
 
       return {
-        chatResponse: parsed.chatResponse,
         objectiveMessage: parsed.objectiveMessage,
         realMessage: parsed.realMessage,
         draftChanged: parsed.draftChanged,
@@ -125,53 +92,72 @@ export class AiService {
     }
   }
 
-  // ─── Prompt builder ───────────────────────────────────────────────────────
-
   private buildPrompt(ctx: AiContext): string {
     const historyText = ctx.chatHistory
-      .filter((m) => m.type === 'text')
-      .map((m) => `[${m.role === 'user' ? 'Utilisateur' : 'IA'}]: ${m.content}`)
+      .filter((m) => m.type === 'text' || m.type === 'target_reply')
+      .map((m) => {
+        if (m.type === 'target_reply') {
+          return `[Humlinker destinataire] : "${m.content}"`;
+        }
+        return `[${m.role === 'user' ? 'Sender' : 'IA'}] : "${m.content}"`;
+      })
       .join('\n');
 
-    const sentDraftsText = ctx.lastSentDrafts
-      .map(
-        (d, i) =>
-          `Version envoyée ${i + 1} — Objectif: "${d.objectiveMessage}"`,
-      )
-      .join('\n');
+    const sentDraftsText = ctx.lastSentDrafts.length
+      ? ctx.lastSentDrafts
+          .map((d, i) => `[Sender objective_message envoye ${i + 1}] : "${d.objectiveMessage}"`)
+          .join('\n')
+      : null;
 
-    const currentDraftText = ctx.currentDraft
-      ? `Objectif actuel: "${ctx.currentDraft.objectiveMessage}"`
-      : 'Aucun draft en cours.';
+    const currentObjective = ctx.currentDraft?.objectiveMessage ?? '';
+    const isFirstMessage =
+      !currentObjective || currentObjective === 'Rien a transmettre pour le moment.';
 
     return `
-Tu es Humlinker, un assistant IA dont le rôle UNIQUE est de retranscrire l'intention d'un message de façon respectueuse, claire et humaine.
+Tu es une IA specialisee dans l'analyse d'intentions et la reformulation de messages.
+Ton role est d'analyser le dernier message envoye par le sender, de le comparer a l'historique de la discussion, puis de generer un objet JSON contenant cinq elements distincts.
 
-RÈGLES ABSOLUES :
-- Tu ne donnes AUCUN conseil, AUCUNE opinion, AUCUNE information extérieure au message
-- Tu ne fais AUCUNE démarche hors du périmètre de l'écriture du message
-- Si la demande de l'utilisateur n'est PAS liée à la reformulation du message, mets outOfScope: true
-- Le realMessage est écrit dans la langue du destinataire (${ctx.targetLanguage})
-- Le objectiveMessage et chatResponse sont écrits dans la langue de l'expéditeur (${ctx.senderLanguage})
-- Relation entre les deux personnes : ${ctx.relationshipType}
+INFORMATIONS SUR LES PARTICIPANTS :
+- Sender (expediteur) : ${ctx.senderName}
+- Langue du sender : ${ctx.senderLanguage}
+- Langue du destinataire : ${ctx.targetLanguage}
+- Relation entre les deux : ${ctx.relationshipType}
 
-CONTEXTE :
-${sentDraftsText ? `Historique des versions précédentes :\n${sentDraftsText}` : 'Premier message.'}
+REGLES ABSOLUES :
+- Tu ne donnes AUCUN conseil, AUCUNE opinion, AUCUNE information exterieure a la reformulation du message
+- Si la demande du sender n'est PAS liee a l'ecriture ou la reformulation d'un message, mets outOfScope: true
+- Si le sender envoie plusieurs intentions dans un seul message, tu les combines toutes dans un seul objectiveMessage et un seul realMessage
 
-Historique du chat :
-${historyText || '(aucun message précédent)'}
+CHAMPS A GENERER :
 
-${currentDraftText}
+1. "objectiveMessage" : La pure intention consolidee du sender. Synthetique, neutre, redigee a la 2eme personne ("Vous souhaitez..."), centree sur l'action finale destinee au destinataire. CONSIGNE STRICTE : ne perds aucun detail - chaque element, justification, contrainte temporelle ou raison doit y figurer. Si plusieurs intentions, les combiner en une seule synthese. Redige en ${ctx.senderLanguage}.
 
-Nouveau message de l'utilisateur : "${ctx.newMessage}"
+2. "realMessage" : Le message diplomatique final, poli et parfaitement mis en forme, destine a etre envoye au destinataire. Construit sur la base de l'objectiveMessage. CONSIGNES STRICTES :
+   - Toujours redige a la 3eme personne, jamais du point de vue du sender
+   - Doit systematiquement commencer sous une forme indirecte comme : "${ctx.senderName} vous partage que..." ou "${ctx.senderName} souhaite vous informer que..." ou "${ctx.senderName} vous indique que..."
+   - Ne jamais ecrire a la 1ere personne du point de vue du sender (ex. : "Je m'occupe de ca")
+   - Si plusieurs intentions, les rediger dans un seul message coherent et fluide
+   - Redige en ${ctx.targetLanguage}
 
-RÉPONDS UNIQUEMENT en JSON valide avec ce format exact :
+3. "draftChanged" : Booleen. true si le message du sender apporte une modification, un nouvel element ou une correction par rapport a l'objectiveMessage precedent. false si le sender ne fait que confirmer ou repeter sans rien ajouter.${isFirstMessage ? ' IMPORTANT : comme il n y a pas encore d objectiveMessage, draftChanged est forcement true.' : ''}
+
+4. "outOfScope" : Booleen. true si la demande du sender ne concerne pas la reformulation ou l'ecriture d'un message.
+
+HISTORIQUE DE LA DISCUSSION :
+${sentDraftsText ?? 'Aucun message encore envoye.'}
+${historyText ? '\n' + historyText : ''}
+
+current_objective_message : "${isFirstMessage ? '' : currentObjective}"
+
+[Dernier message sender] : "${ctx.newMessage}"
+
+FORMAT DE REPONSE :
+Reponds UNIQUEMENT en JSON valide, sans texte avant ou apres :
 {
-  "chatResponse": "Ta réponse conversationnelle courte à afficher dans le chat (en ${ctx.senderLanguage})",
-  "objectiveMessage": "Résumé clair de l'intention globale du sender (en ${ctx.senderLanguage})",
-  "realMessage": "Message final diplomatique prêt à être envoyé au destinataire (en ${ctx.targetLanguage})",
-  "draftChanged": true/false,
-  "outOfScope": true/false
+  "objectiveMessage": "Vous souhaitez...",
+  "realMessage": "...",
+  "draftChanged": true,
+  "outOfScope": false
 }
 `.trim();
   }

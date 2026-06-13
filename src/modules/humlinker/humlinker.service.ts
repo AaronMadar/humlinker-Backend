@@ -1,36 +1,3 @@
-/**
- * HumlinkerService
- *
- * Gère toute la logique métier des humlinkers.
- *
- * ─── Routes exposées ───────────────────────────────────────────────────────
- *
- *  POST   /humlinkers                → createHumlinker()
- *  GET    /humlinkers                → getMyHumlinkers()    (liste lazy WhatsApp)
- *  GET    /humlinkers/:id            → getHumlinkerById()
- *  PATCH  /humlinkers/:id/archive    → archiveHumlinker()
- *  PATCH  /humlinkers/:id/unarchive  → unarchiveHumlinker()
- *  PATCH  /humlinkers/:id/block      → blockHumlinker()
- *
- * ─── Création d'un humlinker ──────────────────────────────────────────────
- *  1. Validation : au moins (email ou phone) OU targetUserId fourni
- *  2. Normalisation du téléphone (E.164)
- *  3. Résolution du target :
- *     a. Si targetUserId fourni → vérifie qu'il existe
- *     b. Sinon → cherche par email/phone → si trouvé lie ; sinon crée placeholder
- *  4. Vérifie qu'aucun humlinker n'existe déjà entre ces deux users
- *  5. Crée le humlinker sender (status: pending, mirrorId: null pour l'instant)
- *  6. Crée le humlinker mirror côté target (sender/target inversés)
- *  7. Lie les deux via mirrorId
- *
- * ─── Blocage ─────────────────────────────────────────────────────────────
- *  Un blocage affecte le humlinker ET son mirror → les deux sont figés.
- *  Peu importe qui bloque, l'autre côté est également bloqué.
- *
- * ─── Archive ──────────────────────────────────────────────────────────────
- *  L'archive est individuelle : chaque utilisateur archive son propre humlinker.
- *  Le mirror n'est pas affecté.
- */
 import {
   BadRequestException,
   ConflictException,
@@ -40,19 +7,17 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { normalizePhone } from '../../utils';
-import type { Humlinker } from './entities';
+import { OnEvent } from '@nestjs/event-emitter';
+import { randomBytes } from 'crypto';
+import type { Humlinker, HumlinkerParticipant } from './entities';
 import type { CreateHumlinkerDto } from './dto';
-import {
-  HUMLINKER_REPOSITORY,
-  type HumlinkerRepository,
-} from './repositories';
-import {
-  USERS_REPOSITORY,
-  type UsersRepository,
-} from '../users/repositories';
+import { HUMLINKER_REPOSITORY, type HumlinkerRepository } from './repositories';
+import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
+import type { User } from '../users/entities';
 import { UsersService } from '../users/users.service';
-import { SmsService } from '../../integrations/sms/sms.service';
+import { USER_PLACEHOLDER_UPGRADED, type UserPlaceholderUpgradedEvent } from '../../events';
+
+const PIN_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 @Injectable()
 export class HumlinkerService {
@@ -64,42 +29,12 @@ export class HumlinkerService {
     @Inject(USERS_REPOSITORY)
     private readonly usersRepository: UsersRepository,
     private readonly usersService: UsersService,
-    private readonly smsService: SmsService,
   ) {}
 
-  // ─── Création ─────────────────────────────────────────────────────────────
-
-  /**
-   * Crée un humlinker entre le sender (userId) et un target.
-   *
-   * Étapes :
-   * 1. Valide qu'on a soit targetUserId, soit au moins email ou phone
-   * 2. Normalise le téléphone en E.164
-   * 3. Résout le target (user existant ou nouveau placeholder)
-   * 4. Vérifie qu'aucun humlinker sender→target n'existe déjà
-   * 5. Crée le humlinker sender (status: pending)
-   * 6. Crée le humlinker mirror (côté target)
-   * 7. Lie les deux via mirrorId
-   */
-  async createHumlinker(
-    senderId: string,
-    dto: CreateHumlinkerDto,
-  ): Promise<Humlinker> {
-    // Étape 1 — Validation
-    if (!dto.targetUserId && !dto.targetContactEmail && !dto.targetContactPhone) {
+  async createHumlinker(senderId: string, dto: CreateHumlinkerDto): Promise<Humlinker> {
+    if (!dto.targetUserId && !dto.targetContactEmail) {
       throw new BadRequestException(
-        'Vous devez fournir soit un targetUserId, soit un email ou un numéro de téléphone.',
-      );
-    }
-
-    // Étape 2 — Normalisation
-    const normalizedPhone = dto.targetContactPhone
-      ? normalizePhone(dto.targetContactPhone)
-      : null;
-
-    if (dto.targetContactPhone && !normalizedPhone) {
-      throw new BadRequestException(
-        'Numéro de téléphone invalide. Utilisez le format international (+33...).',
+        'Vous devez fournir soit un targetUserId (utilisateur inscrit) soit un email (non-inscrit).',
       );
     }
 
@@ -107,142 +42,76 @@ export class HumlinkerService {
       ? dto.targetContactEmail.toLowerCase().trim()
       : null;
 
-    // Étape 3 — Résolution du target
+    const targetContactName = [dto.targetFirstName, dto.targetLastName].filter(Boolean).join(' ');
+    const title = 'Humlink - ' + targetContactName;
+
+    const senderUser = await this.usersRepository.findById(senderId);
+    if (!senderUser) throw new NotFoundException('Utilisateur introuvable.');
+
     const targetUser = await this.resolveTarget({
       targetUserId: dto.targetUserId,
       email: normalizedEmail,
-      phone: normalizedPhone,
-      senderLanguage: dto.creatorLanguage,
-      targetContactName: dto.targetContactName,
+      senderLanguage: senderUser.language,
+      targetFirstName: dto.targetFirstName,
+      targetLastName: dto.targetLastName,
     });
 
     if (targetUser._id === senderId) {
-      throw new BadRequestException(
-        'Vous ne pouvez pas créer un humlinker vers vous-même.',
-      );
+      throw new BadRequestException('Vous ne pouvez pas créer un humlinker vers vous-même.');
     }
 
-    // Étape 4 — Unicité
-    const existing = await this.humlinkerRepository.findBySenderAndTarget(
-      senderId,
-      targetUser._id,
-    );
+    const targetLanguage = !targetUser.isPlaceholder ? targetUser.language : dto.targetLanguage;
+
+    const senderSnapshot: HumlinkerParticipant = this.toParticipantSnapshot(senderUser);
+    const targetSnapshot: HumlinkerParticipant = {
+      ...this.toParticipantSnapshot(targetUser),
+      language: targetLanguage,
+    };
+
+    const existing = await this.humlinkerRepository.findBySenderAndTarget(senderId, targetUser._id);
     if (existing) {
       throw new ConflictException('Un humlinker existe déjà avec ce contact.');
     }
 
-    // Langue du target
-    const targetLanguage =
-      !targetUser.isPlaceholder && targetUser.language
-        ? targetUser.language
-        : (dto.targetLanguage ?? 'fr');
-
-    // Étape 5 — Crée le humlinker sender
     const senderHumlinker = await this.humlinkerRepository.create({
       senderId,
       targetId: targetUser._id,
       communicationChannel: dto.communicationChannel,
-      targetContactName: dto.targetContactName,
-      targetContactEmail: normalizedEmail,
-      targetContactPhone: normalizedPhone,
+      targetContactName,
       relationshipType: dto.relationshipType,
-      title: dto.title,
-      creatorLanguage: dto.creatorLanguage,
-      targetLanguage,
+      title,
+      senderSnapshot,
+      targetSnapshot,
       status: 'pending',
     });
 
-    // Étape 6 — Crée le humlinker mirror (côté target)
+    const mirrorTargetContactName =
+      [senderUser.firstName, senderUser.lastName].filter(Boolean).join(' ') || targetContactName;
+
     const mirrorHumlinker = await this.humlinkerRepository.create({
       senderId: targetUser._id,
       targetId: senderId,
       communicationChannel: dto.communicationChannel,
-      targetContactName: dto.targetContactName,
-      targetContactEmail: null,
-      targetContactPhone: null,
+      targetContactName: mirrorTargetContactName,
       relationshipType: dto.relationshipType,
-      title: dto.title,
-      creatorLanguage: targetLanguage,
-      targetLanguage: dto.creatorLanguage,
+      title,
+      senderSnapshot: targetSnapshot,
+      targetSnapshot: senderSnapshot,
       status: 'pending',
     });
 
-    // Étape 7 — Lie les deux humlinkers via mirrorId
     await Promise.all([
-      this.humlinkerRepository.update(senderHumlinker._id, {
-        mirrorId: mirrorHumlinker._id,
-      }),
-      this.humlinkerRepository.update(mirrorHumlinker._id, {
-        mirrorId: senderHumlinker._id,
-      }),
+      this.humlinkerRepository.update(senderHumlinker._id, { mirrorId: mirrorHumlinker._id }),
+      this.humlinkerRepository.update(mirrorHumlinker._id, { mirrorId: senderHumlinker._id }),
     ]);
 
-    // Étape 8 — Pour les canaux SMS/WhatsApp : crée une Twilio Conversation dédiée.
-    // Chaque humlinker a son propre conversationSid → le webhook peut router
-    // précisément la réponse du target vers le bon humlinker mirror.
-    let twilioConversationSid: string | undefined;
-
-    if (
-      (dto.communicationChannel === 'sms' ||
-        dto.communicationChannel === 'whatsapp') &&
-      normalizedPhone
-    ) {
-      try {
-        twilioConversationSid =
-          await this.smsService.createConversationForHumlinker(
-            normalizedPhone,
-            dto.communicationChannel,
-            senderHumlinker._id, // friendlyName = humhlinkerId pour debug Twilio
-          );
-
-        // Stocke le SID sur les deux côtés (sender et mirror)
-        await Promise.all([
-          this.humlinkerRepository.update(senderHumlinker._id, {
-            twilioConversationSid,
-          }),
-          this.humlinkerRepository.update(mirrorHumlinker._id, {
-            twilioConversationSid,
-          }),
-        ]);
-
-        this.logger.log(
-          `Twilio Conversation ${twilioConversationSid} liée au humlinker ${senderHumlinker._id}`,
-        );
-      } catch (err) {
-        // Non-bloquant : le humlinker est créé mais sans Conversation Twilio.
-        // Le premier send() utilisera le fallback SMS simple.
-        this.logger.error(
-          `Échec création Twilio Conversation pour humlinker ${senderHumlinker._id}`,
-          err,
-        );
-      }
-    }
-
-    return {
-      ...senderHumlinker,
-      mirrorId: mirrorHumlinker._id,
-      twilioConversationSid: twilioConversationSid ?? null,
-    };
+    return { ...senderHumlinker, mirrorId: mirrorHumlinker._id };
   }
 
-  // ─── Lecture ──────────────────────────────────────────────────────────────
-
-  /**
-   * Retourne tous les humlinkers de l'utilisateur (sender OU target),
-   * triés par lastActivityAt DESC.
-   * Lazy load via offset/limit (style WhatsApp).
-   */
-  async getMyHumlinkers(
-    userId: string,
-    options: { limit?: number; offset?: number } = {},
-  ): Promise<Humlinker[]> {
+  async getMyHumlinkers(userId: string, options: { limit?: number; offset?: number } = {}): Promise<Humlinker[]> {
     return this.humlinkerRepository.findAllByUserId(userId, options);
   }
 
-  /**
-   * Retourne un humlinker par son ID.
-   * Vérifie que l'utilisateur est bien le sender ou le target.
-   */
   async getHumlinkerById(humhlinkerId: string, userId: string): Promise<Humlinker> {
     const humlinker = await this.humlinkerRepository.findById(humhlinkerId);
     if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
@@ -250,91 +119,113 @@ export class HumlinkerService {
     return humlinker;
   }
 
-  // ─── Archive ──────────────────────────────────────────────────────────────
-
-  /**
-   * Archive un humlinker (masqué de la liste principale).
-   * Individuel — le mirror n'est pas affecté.
-   */
   async archiveHumlinker(humhlinkerId: string, userId: string): Promise<Humlinker> {
     const humlinker = await this.humlinkerRepository.findById(humhlinkerId);
     if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
     this.assertParticipant(humlinker, userId);
     this.assertNotBlocked(humlinker);
-
-    if (humlinker.status === 'archived') {
-      throw new BadRequestException('Ce humlinker est déjà archivé.');
-    }
-
-    const updated = await this.humlinkerRepository.update(humhlinkerId, {
-      status: 'archived',
-    });
+    if (humlinker.status === 'archived') throw new BadRequestException('Déjà archivé.');
+    const updated = await this.humlinkerRepository.update(humhlinkerId, { status: 'archived' });
     return updated!;
   }
 
-  /**
-   * Désarchive un humlinker (remet dans la liste principale).
-   */
   async unarchiveHumlinker(humhlinkerId: string, userId: string): Promise<Humlinker> {
     const humlinker = await this.humlinkerRepository.findById(humhlinkerId);
     if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
     this.assertParticipant(humlinker, userId);
-
-    if (humlinker.status !== 'archived') {
-      throw new BadRequestException("Ce humlinker n'est pas archivé.");
-    }
-
-    const updated = await this.humlinkerRepository.update(humhlinkerId, {
-      status: 'active',
-    });
+    if (humlinker.status !== 'archived') throw new BadRequestException("Ce humlinker n'est pas archivé.");
+    const updated = await this.humlinkerRepository.update(humhlinkerId, { status: 'active' });
     return updated!;
   }
 
-  // ─── Blocage ──────────────────────────────────────────────────────────────
-
-  /**
-   * Bloque un humlinker ET son mirror en une transaction atomique.
-   * Les deux côtés sont figés — plus aucun message ne peut transiter.
-   */
   async blockHumlinker(humhlinkerId: string, userId: string): Promise<void> {
     const humlinker = await this.humlinkerRepository.findById(humhlinkerId);
     if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
     this.assertParticipant(humlinker, userId);
     this.assertNotBlocked(humlinker);
-
     if (!humlinker.mirrorId) {
-      // Edge case : pas encore de mirror (race condition à la création)
-      await this.humlinkerRepository.update(humhlinkerId, {
-        status: 'blocked',
-        blockedBy: userId,
-      });
+      await this.humlinkerRepository.update(humhlinkerId, { status: 'blocked', blockedBy: userId });
       return;
     }
-
-    await this.humlinkerRepository.blockBoth(
-      humhlinkerId,
-      humlinker.mirrorId,
-      userId,
-    );
+    await this.humlinkerRepository.blockBoth(humhlinkerId, humlinker.mirrorId, userId);
   }
 
-  // ─── Utilitaires privés ───────────────────────────────────────────────────
+  @OnEvent(USER_PLACEHOLDER_UPGRADED)
+  async onPlaceholderUpgraded(event: UserPlaceholderUpgradedEvent): Promise<void> {
+    const upgradedSnapshot: HumlinkerParticipant = {
+      userId: event.userId,
+      firstName: event.firstName,
+      lastName: event.lastName,
+      email: event.email,
+      language: event.language,
+      gender: event.gender,
+      profilePicture: event.profilePicture,
+      isPlaceholder: false,
+    };
 
-  /**
-   * Résout le target :
-   *  A. targetUserId fourni → vérifie qu'il existe
-   *  B. email fourni → cherche dans la DB
-   *  C. téléphone fourni → cherche dans la DB
-   *  D. non trouvé → crée un placeholder user
-   */
+    const asTarget = await this.humlinkerRepository.findAllByTargetId(event.userId);
+    if (asTarget.length > 0) {
+      await Promise.all(
+        asTarget.flatMap((h) => {
+          const needsChannelSwitch = h.communicationChannel !== 'app' && h.status !== 'blocked';
+          const updates = [
+            this.humlinkerRepository.update(h._id, {
+              targetSnapshot: upgradedSnapshot,
+              ...(needsChannelSwitch && { communicationChannel: 'app' }),
+            }),
+          ];
+          if (h.mirrorId) {
+            updates.push(
+              this.humlinkerRepository.update(h.mirrorId, {
+                senderSnapshot: upgradedSnapshot,
+                ...(needsChannelSwitch && { communicationChannel: 'app' }),
+              }),
+            );
+          }
+          return updates;
+        }),
+      );
+    }
+
+    const asSender = await this.humlinkerRepository.findAllBySenderId(event.userId);
+    if (asSender.length > 0) {
+      await Promise.all(
+        asSender.flatMap((h) => {
+          const updates = [
+            this.humlinkerRepository.update(h._id, { senderSnapshot: upgradedSnapshot }),
+          ];
+          if (h.mirrorId) {
+            updates.push(
+              this.humlinkerRepository.update(h.mirrorId, { targetSnapshot: upgradedSnapshot }),
+            );
+          }
+          return updates;
+        }),
+      );
+    }
+  }
+
+  private toParticipantSnapshot(user: User): HumlinkerParticipant {
+    return {
+      userId: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      language: user.language,
+      gender: user.gender,
+      profilePicture: user.profilePicture,
+      isPlaceholder: user.isPlaceholder,
+    };
+  }
+
   private async resolveTarget(params: {
     targetUserId?: string;
     email: string | null;
-    phone: string | null;
     senderLanguage: string;
-    targetContactName: string;
+    targetFirstName: string;
+    targetLastName?: string;
   }) {
-    const { targetUserId, email, phone, senderLanguage, targetContactName } = params;
+    const { targetUserId, email, senderLanguage, targetFirstName, targetLastName } = params;
 
     if (targetUserId) {
       const user = await this.usersRepository.findById(targetUserId);
@@ -347,19 +238,17 @@ export class HumlinkerService {
       if (byEmail) return byEmail;
     }
 
-    if (phone) {
-      const byPhone = await this.usersRepository.findByPhoneNumber(phone);
-      if (byPhone) return byPhone;
-    }
+    // Génère un PIN pour le placeholder
+    const bytes = randomBytes(8);
+    const pin = Array.from(bytes).map(b => PIN_CHARS[b % PIN_CHARS.length]).join('');
 
-    // Aucun utilisateur trouvé → placeholder
-    const nameParts = targetContactName.trim().split(' ');
     const placeholder = await this.usersService.createPlaceholderUser({
+      pin,
       language: senderLanguage,
-      firstName: nameParts[0] ?? null,
-      lastName: nameParts.slice(1).join(' ') || null,
+      firstName: targetFirstName,
+      lastName: targetLastName ?? null,
       email,
-      phoneNumber: phone,
+      phoneNumber: null,
       placeholderSource: 'humlinker_invitation',
     });
 
