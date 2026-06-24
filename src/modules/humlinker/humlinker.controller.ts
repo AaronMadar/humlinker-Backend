@@ -101,20 +101,67 @@ export class HumlinkerController {
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
+  @Patch(':id/accept')
+  @ApiOperation({
+    summary: 'Accepter une invitation',
+    description: "Le destinataire d'une invitation (statut pending) l'accepte : les deux côtés passent en statut `active`.",
+  })
+  @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiResponse({ status: 200, description: 'Invitation acceptée.' })
+  @ApiResponse({ status: 400, description: 'Humlinker non pending ou déjà actif.' })
+  @ApiResponse({ status: 403, description: "Seul le destinataire peut accepter l'invitation." })
+  async acceptInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AppApiResponse<Humlinker>> {
+    const data = await this.humlinkerService.acceptInvitation(id, user.userId);
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+  @Patch(':id/decline')
+  @ApiOperation({
+    summary: 'Refuser une invitation',
+    description: "Le destinataire d'une invitation (statut pending) la refuse : les deux côtés passent en statut `archived`.",
+  })
+  @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiResponse({ status: 200, description: 'Invitation refusée.' })
+  @ApiResponse({ status: 403, description: "Seul le destinataire peut refuser l'invitation." })
+  async declineInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AppApiResponse<null>> {
+    await this.humlinkerService.declineInvitation(id, user.userId);
+    return { success: true, data: null, timestamp: new Date().toISOString() };
+  }
+
+  @Patch(':id/cancel')
+  @ApiOperation({
+    summary: "Annuler une invitation envoyée",
+    description: "L'initiateur d'une invitation (statut pending) l'annule : les deux côtés passent en statut `archived`.",
+  })
+  @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiResponse({ status: 200, description: 'Invitation annulée.' })
+  @ApiResponse({ status: 403, description: "Seul l'expéditeur peut annuler l'invitation." })
+  async cancelInvitation(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AppApiResponse<null>> {
+    await this.humlinkerService.cancelInvitation(id, user.userId);
+    return { success: true, data: null, timestamp: new Date().toISOString() };
+  }
+
   @Patch(':id/block')
   @ApiOperation({
     summary: 'Bloquer un humlinker',
-    description: "Bloque le humlinker ET son mirror côté target. Les deux côtés passent en statut `blocked` — plus aucun message ne peut être envoyé.",
+    description: "Bloque le humlinker et son miroir. Les deux côtés ne peuvent plus envoyer de messages.",
   })
   @ApiParam({ name: 'id', description: 'UUID du humlinker.', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
-  @ApiResponse({ status: 200, description: 'Humlinker bloqué (+ mirror).' })
-  @ApiResponse({ status: 400, description: 'Humlinker déjà bloqué.' })
+  @ApiResponse({ status: 200, description: 'Humlinker bloqué.' })
+  @ApiResponse({ status: 400, description: 'Déjà bloqué.' })
   async blockHumlinker(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<AppApiResponse<null>> {
     await this.humlinkerService.blockHumlinker(id, user.userId);
-    return { success: true, data: null, message: 'Humlinker bloqué.', timestamp: new Date().toISOString() };
+    return { success: true, data: null, timestamp: new Date().toISOString() };
   }
-
 }

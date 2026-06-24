@@ -91,6 +91,22 @@ export class NotificationsService {
   }
 
   /**
+   * Notifie le destinataire qu'il a reçu une nouvelle invitation (humlinker pending).
+   * Le payload contient l'objet humlinker complet côté destinataire (record miroir).
+   */
+  notifyInvitationReceived(targetUserId: string, humlinker: unknown): void {
+    this.gateway.sendToUser(targetUserId, 'invitation_received', { humlinker });
+  }
+
+  /**
+   * Notifie un utilisateur que le statut de l'un de ses humlinkers a changé.
+   * Utilisé pour : accept (→ active), decline/cancel (→ archived).
+   */
+  notifyHumlinkerStatusChanged(userId: string, humhlinkerId: string, status: string): void {
+    this.gateway.sendToUser(userId, 'humlinker_status_changed', { humhlinkerId, status });
+  }
+
+  /**
    * Notifie un utilisateur que son draft a été mis à jour par l'IA.
    * Uniquement via WebSocket (pas de FCM pour les mises à jour de draft).
    */
@@ -105,23 +121,21 @@ export class NotificationsService {
     });
   }
 
-  // ─── FCM ──────────────────────────────────────────────────────────────────
 
   private async sendFcmPush(
-    fcmToken: string,
+    token: string,
     payload: { title: string; body: string; data?: Record<string, string> },
   ): Promise<void> {
     try {
       await admin.messaging().send({
-        token: fcmToken,
+        token,
         notification: { title: payload.title, body: payload.body },
-        data: payload.data ?? {},
+        data: payload.data,
         android: { priority: 'high' },
-        apns: { payload: { aps: { contentAvailable: true } } },
+        apns: { payload: { aps: { sound: 'default' } } },
       });
     } catch (err) {
-      // Token invalide / expiré → on log mais on ne fait pas planter l'app
-      this.logger.warn(`FCM push échoué pour token ${fcmToken.slice(0, 10)}…`, err);
+      this.logger.error('Échec envoi FCM push', err);
     }
   }
 }

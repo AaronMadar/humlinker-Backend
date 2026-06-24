@@ -9,6 +9,7 @@ export interface CreateHumlinkerData {
   senderId: string;
   targetId: string;
   mirrorId?: string | null;
+  isInitiator?: boolean;
   status?: HumlinkerStatus;
   communicationChannel: Humlinker['communicationChannel'];
   targetContactName: string;
@@ -20,6 +21,7 @@ export interface CreateHumlinkerData {
 
 export interface UpdateHumlinkerData {
   mirrorId?: string | null;
+  isInitiator?: boolean;
   status?: HumlinkerStatus;
   blockedBy?: string | null;
   lastActivityAt?: Date;

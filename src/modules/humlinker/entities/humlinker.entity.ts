@@ -47,6 +47,12 @@ export interface Humlinker {
    */
   mirrorId: string | null;
 
+  /**
+   * true  = record de l'initiateur (celui qui a créé l'invitation)
+   * false = record miroir du destinataire (celui qui a reçu l'invitation)
+   */
+  isInitiator: boolean;
+
   status: HumlinkerStatus;
   /** userId de la personne qui a bloque (null si non bloque) */
   blockedBy: string | null;
@@ -71,6 +77,8 @@ export interface Humlinker {
   target: HumlinkerParticipant;
 
   lastActivityAt: Date;
+  /** Contenu du dernier real_message (preview sidebar) */
+  lastMessage?: string;
   createdAt: Date;
   updatedAt: Date;
 }

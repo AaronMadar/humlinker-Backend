@@ -24,6 +24,14 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       orderBy: { lastActivityAt: 'desc' },
       take: limit,
       skip: offset,
+      include: {
+        chatMessages: {
+          where: { type: { in: ['real_message', 'draft_snapshot'] } },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { content: true },
+        },
+      },
     });
     return rows.map((r) => this.toHumlinker(r as never));
   }
@@ -52,6 +60,7 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
         senderId: data.senderId,
         targetId: data.targetId,
         mirrorId: data.mirrorId ?? null,
+        isInitiator: data.isInitiator ?? true,
         status: data.status ?? 'pending',
         communicationChannel: data.communicationChannel,
         targetContactName: data.targetContactName,
@@ -71,6 +80,7 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
         where: { id },
         data: {
           ...(data.mirrorId !== undefined && { mirrorId: data.mirrorId }),
+          ...(data.isInitiator !== undefined && { isInitiator: data.isInitiator }),
           ...(data.status !== undefined && { status: data.status }),
           ...(data.blockedBy !== undefined && { blockedBy: data.blockedBy }),
           ...(data.lastActivityAt !== undefined && { lastActivityAt: data.lastActivityAt }),
@@ -97,6 +107,7 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
     senderId: string;
     targetId: string;
     mirrorId: string | null;
+    isInitiator: boolean;
     status: string;
     blockedBy: string | null;
     communicationChannel: string;
@@ -108,12 +119,14 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
     lastActivityAt: Date;
     createdAt: Date;
     updatedAt: Date;
+    chatMessages?: { content: string }[];
   }): Humlinker {
     return {
       _id: row.id,
       senderId: row.senderId,
       targetId: row.targetId,
       mirrorId: row.mirrorId,
+      isInitiator: row.isInitiator,
       status: row.status as Humlinker['status'],
       blockedBy: row.blockedBy,
       communicationChannel: row.communicationChannel as Humlinker['communicationChannel'],
@@ -123,6 +136,7 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       sender: row.senderSnapshot as HumlinkerParticipant,
       target: row.targetSnapshot as HumlinkerParticipant,
       lastActivityAt: row.lastActivityAt,
+      lastMessage: row.chatMessages?.[0]?.content ?? undefined,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

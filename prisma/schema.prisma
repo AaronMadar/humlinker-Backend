@@ -81,8 +81,9 @@ model Humlinker {
   senderId String
   targetId String
 
-  mirrorId  String?         @unique
-  status    HumlinkerStatus @default(pending)
+  mirrorId    String?         @unique
+  isInitiator Boolean         @default(true)
+  status      HumlinkerStatus @default(pending)
   blockedBy String?
 
   communicationChannel HumlinkerChannel @default(app)

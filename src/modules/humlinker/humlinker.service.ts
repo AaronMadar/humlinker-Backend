@@ -15,6 +15,7 @@ import { HUMLINKER_REPOSITORY, type HumlinkerRepository } from './repositories';
 import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 import type { User } from '../users/entities';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { USER_PLACEHOLDER_UPGRADED, type UserPlaceholderUpgradedEvent } from '../../events';
 
 const PIN_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -29,6 +30,7 @@ export class HumlinkerService {
     @Inject(USERS_REPOSITORY)
     private readonly usersRepository: UsersRepository,
     private readonly usersService: UsersService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createHumlinker(senderId: string, dto: CreateHumlinkerDto): Promise<Humlinker> {
@@ -70,6 +72,17 @@ export class HumlinkerService {
 
     const existing = await this.humlinkerRepository.findBySenderAndTarget(senderId, targetUser._id);
     if (existing) {
+      if (existing.status === 'archived') {
+        // Réactivation : remet pending + corrige isInitiator
+        const updated = await this.humlinkerRepository.update(existing._id, { status: 'pending', isInitiator: true });
+        if (existing.mirrorId) {
+          const mirrorUpdated = await this.humlinkerRepository.update(existing.mirrorId, { status: 'pending', isInitiator: false });
+          if (mirrorUpdated) {
+            this.notificationsService.notifyInvitationReceived(existing.targetId, mirrorUpdated);
+          }
+        }
+        return updated!;
+      }
       throw new ConflictException('Un humlinker existe déjà avec ce contact.');
     }
 
@@ -82,6 +95,7 @@ export class HumlinkerService {
       title,
       senderSnapshot,
       targetSnapshot,
+      isInitiator: true,
       status: 'pending',
     });
 
@@ -97,6 +111,7 @@ export class HumlinkerService {
       title,
       senderSnapshot: targetSnapshot,
       targetSnapshot: senderSnapshot,
+      isInitiator: false,
       status: 'pending',
     });
 
@@ -104,6 +119,10 @@ export class HumlinkerService {
       this.humlinkerRepository.update(senderHumlinker._id, { mirrorId: mirrorHumlinker._id }),
       this.humlinkerRepository.update(mirrorHumlinker._id, { mirrorId: senderHumlinker._id }),
     ]);
+
+    // Notifie le destinataire en temps réel
+    const mirrorWithLinks = { ...mirrorHumlinker, mirrorId: senderHumlinker._id };
+    this.notificationsService.notifyInvitationReceived(targetUser._id, mirrorWithLinks);
 
     return { ...senderHumlinker, mirrorId: mirrorHumlinker._id };
   }
@@ -136,6 +155,79 @@ export class HumlinkerService {
     if (humlinker.status !== 'archived') throw new BadRequestException("Ce humlinker n'est pas archivé.");
     const updated = await this.humlinkerRepository.update(humhlinkerId, { status: 'active' });
     return updated!;
+  }
+
+  async acceptInvitation(humhlinkerId: string, userId: string): Promise<Humlinker> {
+    const humlinker = await this.humlinkerRepository.findById(humhlinkerId);
+    if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
+    this.assertParticipant(humlinker, userId);
+    if (humlinker.isInitiator) {
+      throw new ForbiddenException("Seul le destinataire peut accepter l'invitation.");
+    }
+    if (humlinker.status !== 'pending') {
+      throw new BadRequestException('Ce humlinker ne peut pas être accepté (statut non pending).');
+    }
+    const updated = await this.humlinkerRepository.update(humhlinkerId, { status: 'active' });
+    if (humlinker.mirrorId) {
+      await this.humlinkerRepository.update(humlinker.mirrorId, { status: 'active' });
+      const initiatorRecord = await this.humlinkerRepository.findById(humlinker.mirrorId);
+      if (initiatorRecord) {
+        this.notificationsService.notifyHumlinkerStatusChanged(
+          initiatorRecord.senderId,
+          humlinker.mirrorId,
+          'active',
+        );
+      }
+    }
+    return updated!;
+  }
+
+  async declineInvitation(humhlinkerId: string, userId: string): Promise<void> {
+    const humlinker = await this.humlinkerRepository.findById(humhlinkerId);
+    if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
+    this.assertParticipant(humlinker, userId);
+    if (humlinker.isInitiator) {
+      throw new ForbiddenException("Seul le destinataire peut refuser l'invitation.");
+    }
+    if (humlinker.status !== 'pending') {
+      throw new BadRequestException('Ce humlinker ne peut pas être refusé (statut non pending).');
+    }
+    await this.humlinkerRepository.update(humhlinkerId, { status: 'archived' });
+    if (humlinker.mirrorId) {
+      await this.humlinkerRepository.update(humlinker.mirrorId, { status: 'archived' });
+      const initiatorRecord = await this.humlinkerRepository.findById(humlinker.mirrorId);
+      if (initiatorRecord) {
+        this.notificationsService.notifyHumlinkerStatusChanged(
+          initiatorRecord.senderId,
+          humlinker.mirrorId,
+          'archived',
+        );
+      }
+    }
+  }
+
+  async cancelInvitation(humhlinkerId: string, userId: string): Promise<void> {
+    const humlinker = await this.humlinkerRepository.findById(humhlinkerId);
+    if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
+    this.assertParticipant(humlinker, userId);
+    if (!humlinker.isInitiator) {
+      throw new ForbiddenException("Seul l'expéditeur peut annuler l'invitation.");
+    }
+    if (humlinker.status !== 'pending') {
+      throw new BadRequestException('Ce humlinker ne peut pas être annulé (statut non pending).');
+    }
+    await this.humlinkerRepository.update(humhlinkerId, { status: 'archived' });
+    if (humlinker.mirrorId) {
+      await this.humlinkerRepository.update(humlinker.mirrorId, { status: 'archived' });
+      const mirrorRecord = await this.humlinkerRepository.findById(humlinker.mirrorId);
+      if (mirrorRecord) {
+        this.notificationsService.notifyHumlinkerStatusChanged(
+          mirrorRecord.senderId,
+          humlinker.mirrorId,
+          'archived',
+        );
+      }
+    }
   }
 
   async blockHumlinker(humhlinkerId: string, userId: string): Promise<void> {
@@ -238,7 +330,6 @@ export class HumlinkerService {
       if (byEmail) return byEmail;
     }
 
-    // Génère un PIN pour le placeholder
     const bytes = randomBytes(8);
     const pin = Array.from(bytes).map(b => PIN_CHARS[b % PIN_CHARS.length]).join('');
 
