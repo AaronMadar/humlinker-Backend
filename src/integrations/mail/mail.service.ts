@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import { APP_CONFIG } from '@/config';
 import configuration from '@/config/configuration';
+import { escapeHtml, singleLine } from '@/utils/html.util';
 
 @Injectable()
 export class MailService {
@@ -33,23 +34,27 @@ export class MailService {
     message: string,
     downloadUrl: string,
   ): Promise<void> {
+    // Contenu fourni par l'utilisateur → toujours échappé dans le HTML
+    const safeName = escapeHtml(singleLine(senderName));
+    const safeMessage = escapeHtml(message).replace(/\r?\n/g, '<br>');
+    const safeUrl = escapeHtml(downloadUrl);
     try {
       await this.transporter.sendMail({
         from: this.config.mail.from,
         to,
-        subject: senderName + ' vous a envoye un message via Humlinker',
+        subject: singleLine(senderName) + ' vous a envoye un message via Humlinker',
         text:
           senderName + ' vous transmet :\n\n"' + message + '"\n\n' +
           'Pour repondre, telechargez Humlinker : ' + downloadUrl + '\n' +
           'Le chat apparaitra et vous pourrez repondre directement.',
         html:
           '<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#333;">' +
-          '<h2 style="color:#4F46E5;">Message de ' + senderName + '</h2>' +
+          '<h2 style="color:#4F46E5;">Message de ' + safeName + '</h2>' +
           '<div style="background:#F9FAFB;border-left:4px solid #4F46E5;padding:16px 20px;border-radius:4px;margin:16px 0;">' +
-          '<p style="margin:0;font-size:15px;line-height:1.6;">' + message + '</p>' +
+          '<p style="margin:0;font-size:15px;line-height:1.6;">' + safeMessage + '</p>' +
           '</div>' +
           '<p style="color:#555;font-size:14px;">Vous souhaitez repondre ? Telechargez <strong>Humlinker</strong> et le fil apparaitra automatiquement.</p>' +
-          '<a href="' + downloadUrl + '" style="display:inline-block;background:#4F46E5;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:8px;">Telecharger Humlinker</a>' +
+          '<a href="' + safeUrl + '" style="display:inline-block;background:#4F46E5;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:8px;">Telecharger Humlinker</a>' +
           '<p style="color:#999;font-size:12px;margin-top:24px;">Ce message a ete transmis via Humlinker. Vous ne pouvez pas repondre directement a cet email.</p>' +
           '</div>',
       });

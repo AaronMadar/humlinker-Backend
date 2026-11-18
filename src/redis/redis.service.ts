@@ -51,6 +51,41 @@ export class RedisService implements OnModuleDestroy {
     return result === 1;
   }
 
+  /**
+   * Incrémente un compteur et pose son TTL au premier incrément (fenêtre fixe).
+   * Atomique (MULTI) → fiable même avec plusieurs instances du backend.
+   * Retourne la nouvelle valeur et le TTL restant (secondes).
+   */
+  async incrWithTtl(
+    key: string,
+    ttlSeconds: number,
+  ): Promise<{ count: number; ttl: number }> {
+    const results = await this.client.multi().incr(key).ttl(key).exec();
+    const count = Number(results?.[0]?.[1] ?? 0);
+    let ttl = Number(results?.[1]?.[1] ?? -1);
+    // Clé neuve (ou sans expiration) → on pose la fenêtre
+    if (ttl < 0) {
+      await this.client.expire(key, ttlSeconds);
+      ttl = ttlSeconds;
+    }
+    return { count, ttl };
+  }
+
+  /**
+   * Pose une clé seulement si elle n'existe pas (verrou / cooldown).
+   * Retourne true si la clé a été créée, false si elle existait déjà.
+   */
+  async setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
+  }
+
+  /** TTL restant d'une clé en secondes (0 si absente ou sans expiration). */
+  async ttl(key: string): Promise<number> {
+    const ttl = await this.client.ttl(key);
+    return ttl > 0 ? ttl : 0;
+  }
+
   // Ferme proprement la connexion Redis à la destruction du module NestJS
   onModuleDestroy() {
     this.client.disconnect();

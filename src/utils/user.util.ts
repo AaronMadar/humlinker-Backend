@@ -21,3 +21,18 @@ export function sanitizeUser(user: User): SafeUser {
 export function sanitizeUsers(users: User[]): SafeUser[] {
   return users.map(sanitizeUser);
 }
+/**
+ * Profil public — ce qu'un autre utilisateur a le droit de voir (recherche par PIN).
+ * Jamais d'email, de téléphone ni de données de compte.
+ */
+export type PublicUser = Pick<User, '_id' | 'pin' | 'firstName' | 'lastName' | 'profilePicture'>;
+
+export function toPublicUser(user: User): PublicUser {
+  return {
+    _id: user._id,
+    pin: user.pin,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    profilePicture: user.profilePicture,
+  };
+}

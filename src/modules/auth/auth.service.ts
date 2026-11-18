@@ -10,6 +10,8 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   UnauthorizedException,
@@ -23,6 +25,7 @@ import { APP_CONFIG } from '@/config';
 import configuration from '@/config/configuration';
 import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 import { OtpService } from './services/otp.service';
+import { RedisService } from '@/redis/redis.service';
 import type { RegisterUserDto } from './dto/register-user.dto';
 import type { LoginDto } from './dto/login.dto';
 import type { GoogleAuthDto } from './dto/google-auth.dto';
@@ -30,6 +33,12 @@ import type { CompleteGoogleProfileDto } from './dto/complete-google-profile.dto
 import type { JwtPayload } from './interfaces/jwt-payload.interface';
 
 const BCRYPT_ROUNDS = 10;
+
+/** Anti brute-force : nombre d'échecs tolérés par identifiant avant blocage temporaire. */
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_LOCK_SECONDS = 15 * 60;
+/** Hash factice → temps de réponse identique que le compte existe ou non (anti-énumération). */
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('humlinker-dummy-password', BCRYPT_ROUNDS);
 const PIN_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans 0/O et 1/I pour éviter la confusion
 
 export interface AuthResult {
@@ -49,6 +58,7 @@ export class AuthService {
     private readonly config: ReturnType<typeof configuration>,
     private readonly jwtService: JwtService,
     private readonly otpService: OtpService,
+    private readonly redis: RedisService,
   ) {
     this.googleClient = new OAuth2Client(config.google.clientId);
   }
@@ -113,22 +123,39 @@ export class AuthService {
   // ─── Connexion ────────────────────────────────────────────────────────────
 
   async login(dto: LoginDto): Promise<AuthResult> {
-    const user = await this.usersRepository.findByEmailOrPhone(dto.identifier.trim());
+    const identifier = dto.identifier.trim();
+    const failuresKey = `login:fail:${identifier.toLowerCase()}`;
 
-    if (!user) {
-      throw new UnauthorizedException('Identifiants invalides.');
+    // Compte temporairement bloqué après trop d'échecs
+    const failures = Number((await this.redis.get(failuresKey)) ?? 0);
+    if (failures >= LOGIN_MAX_FAILURES) {
+      const ttl = await this.redis.ttl(failuresKey);
+      throw new HttpException(
+        `Trop de tentatives de connexion. Réessayez dans ${Math.max(1, Math.ceil(ttl / 60))} min.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
-    if (!user.passwordHash) {
+    const user = await this.usersRepository.findByEmailOrPhone(identifier);
+
+    if (user && !user.passwordHash) {
       throw new UnauthorizedException(
         'Ce compte utilise Google. Veuillez vous connecter via Google.',
       );
     }
 
-    const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!passwordMatches) {
+    // On compare toujours un hash (même factice) → pas de différence de timing
+    const passwordMatches = await bcrypt.compare(
+      dto.password,
+      user?.passwordHash ?? DUMMY_PASSWORD_HASH,
+    );
+
+    if (!user || !passwordMatches) {
+      await this.redis.incrWithTtl(failuresKey, LOGIN_LOCK_SECONDS);
       throw new UnauthorizedException('Identifiants invalides.');
     }
+
+    await this.redis.del(failuresKey);
 
     const updatedUser =
       (await this.usersRepository.updateLastLoginAt(user._id, new Date())) ?? user;

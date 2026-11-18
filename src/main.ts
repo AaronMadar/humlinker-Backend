@@ -1,33 +1,49 @@
 import 'dotenv/config';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { IoAdapter } from '@nestjs/platform-socket.io';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import helmet from 'helmet';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { API_PREFIX, API_VERSION } from './common';
 import { APP_CONFIG } from './config';
 import configuration from './config/configuration';
+import { getAllowedOrigins, validateEnv } from './config/env.validation';
+import { CorsIoAdapter } from './common/adapters/cors-io.adapter';
 import { HttpExceptionFilter } from './filters';
 import { LoggingInterceptor } from './interceptors';
 import { NotificationsService } from './modules/notifications/notifications.service';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // --- Variables d'environnement : bloquant en production si incomplet ---
+  validateEnv();
+
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   const config = app.get<ReturnType<typeof configuration>>(APP_CONFIG);
+  const isProduction = config.app.env === 'production';
+  const allowedOrigins = getAllowedOrigins();
 
-  // --- CORS ---
+  // --- Derrière un reverse proxy (Railway, Render, Nginx…) : vraie IP client pour le rate limiting ---
+  if (process.env.TRUST_PROXY) {
+    const trustProxy = process.env.TRUST_PROXY;
+    app.set('trust proxy', /^\d+$/.test(trustProxy) ? parseInt(trustProxy, 10) : trustProxy);
+  }
+
+  // --- En-têtes de sécurité HTTP ---
+  // CSP désactivée hors prod pour que Swagger UI fonctionne
+  app.use(helmet({ contentSecurityPolicy: isProduction ? undefined : false }));
+
+  // --- CORS : uniquement les origines du front ---
   app.enableCors({
-    origin: config.app.env === 'production'
-      ? (process.env.FRONTEND_URL ?? false)
-      : '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
   });
 
-  // --- WebSocket (Socket.io) ---
-  app.useWebSocketAdapter(new IoAdapter(app));
+  // --- WebSocket (Socket.io) avec le même CORS ---
+  app.useWebSocketAdapter(new CorsIoAdapter(app, allowedOrigins));
 
   // --- Global prefix ---
   app.setGlobalPrefix(`${API_PREFIX}/${API_VERSION}`);

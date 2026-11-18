@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as bcrypt from 'bcrypt';
-import { sanitizeUser, type SafeUser } from '@/utils';
+import { sanitizeUser, toPublicUser, type PublicUser, type SafeUser } from '@/utils';
 import { UserPlaceholderUpgradedEvent, USER_PLACEHOLDER_UPGRADED } from '@/events';
 import type { User, UserPlaceholderSource } from './entities';
 import type { UpdatePasswordDto } from './dto/update-password.dto';
@@ -172,11 +172,11 @@ export class UsersService {
   }
 
   /** Recherche par PIN exact (insensible à la casse). Retourne au plus 1 résultat. */
-  async searchUsers(callerId: string, dto: SearchUsersQueryDto): Promise<SafeUser[]> {
+  async searchUsers(callerId: string, dto: SearchUsersQueryDto): Promise<PublicUser[]> {
     const pin = dto.q.trim().toUpperCase();
     const user = await this.usersRepository.findByPin(pin);
     if (!user || user._id === callerId || user.isPlaceholder) return [];
-    return [sanitizeUser(user)];
+    return [toPublicUser(user)];
   }
 
   async createPlaceholderUser(input: CreatePlaceholderUserInput): Promise<SafeUser> {
