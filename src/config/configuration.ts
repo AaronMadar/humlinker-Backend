@@ -4,7 +4,8 @@ export default () => ({
     env: process.env.NODE_ENV ?? 'development',
     port: parseInt(process.env.PORT ?? '3000', 10),
     url: process.env.APP_URL ?? 'http://localhost:3000',
-    downloadUrl: process.env.APP_DOWNLOAD_URL ?? 'https://humlinker.app/download',
+    downloadUrl:
+      process.env.APP_DOWNLOAD_URL ?? 'https://humlinker.app/download',
   },
 
   database: {
@@ -12,7 +13,8 @@ export default () => ({
   },
 
   jwt: {
-    secret: process.env.JWT_SECRET ?? 'humlinker-dev-secret-change-in-production',
+    secret:
+      process.env.JWT_SECRET ?? 'humlinker-dev-secret-change-in-production',
     expiresIn: process.env.JWT_EXPIRATION ?? '24h',
   },
 

@@ -1,5 +1,5 @@
 /**
- * AiService — IA médiatrice de Humlinker (Gemini).
+ * AiService — IA médiatrice de Humlinker (Gemini, SDK officiel @google/genai).
  *
  * Produit, à partir de ce que le Sender veut dire :
  *  - objectiveMessage : l'intention consolidée, visible par le Sender
@@ -24,14 +24,12 @@ import {
   Logger,
 } from '@nestjs/common';
 import {
-  GoogleGenerativeAI,
-  GoogleGenerativeAIAbortError,
-  GoogleGenerativeAIFetchError,
-  SchemaType,
-  type GenerationConfig,
-  type GenerativeModel,
-  type ResponseSchema,
-} from '@google/generative-ai';
+  ApiError,
+  GoogleGenAI,
+  Type,
+  type GenerateContentConfig,
+  type Schema,
+} from '@google/genai';
 import { APP_CONFIG } from '../../config';
 import configuration from '../../config/configuration';
 import type { ChatMessage, Draft } from '../humlinker/entities';
@@ -102,18 +100,42 @@ export const EMPTY_OBJECTIVES = [
 ];
 
 const MAX_FIELD_LENGTH = 8000;
+
+/**
+ * Filet de sécurité déterministe (en plus du prompt) : généralisations
+ * accusatrices SANS ambiguïté dans le message reçu par un Target francophone.
+ * « toujours » seul n'y figure pas (il peut signifier « encore »).
+ */
+const ACCUSATORY_GENERALIZATIONS: Record<string, RegExp> = {
+  fr: /comme d'habitude|comme toujours|à chaque fois|c'est toujours|souvent|régulièrement|récurren/i,
+};
+
+/** true si le realMessage contient une généralisation accusatrice connue. */
+export function hasAccusatoryGeneralization(
+  realMessage: string,
+  targetLanguage: string,
+): boolean {
+  return ACCUSATORY_GENERALIZATIONS[targetLanguage]?.test(realMessage) ?? false;
+}
 const MAX_ATTEMPTS = 2;
 
-const RESPONSE_SCHEMA: ResponseSchema = {
-  type: SchemaType.OBJECT,
+const RESPONSE_SCHEMA: Schema = {
+  type: Type.OBJECT,
   properties: {
-    objectiveMessage: { type: SchemaType.STRING },
-    realMessage: { type: SchemaType.STRING },
-    draftChanged: { type: SchemaType.BOOLEAN },
-    outOfScope: { type: SchemaType.BOOLEAN },
-    contentRefused: { type: SchemaType.BOOLEAN },
+    objectiveMessage: { type: Type.STRING },
+    realMessage: { type: Type.STRING },
+    draftChanged: { type: Type.BOOLEAN },
+    outOfScope: { type: Type.BOOLEAN },
+    contentRefused: { type: Type.BOOLEAN },
   },
   required: [
+    'objectiveMessage',
+    'realMessage',
+    'draftChanged',
+    'outOfScope',
+    'contentRefused',
+  ],
+  propertyOrdering: [
     'objectiveMessage',
     'realMessage',
     'draftChanged',
@@ -206,51 +228,71 @@ export function parseAiResponse(text: string): ParsedAiResponse {
 }
 
 export function isRetriable(err: unknown): boolean {
-  if (
-    err instanceof AiInvalidResponseError ||
-    err instanceof GoogleGenerativeAIAbortError
-  ) {
-    return true;
+  if (err instanceof AiInvalidResponseError) return true;
+  if (err instanceof ApiError) {
+    return err.status === 408 || err.status === 429 || err.status >= 500;
   }
-  if (err instanceof GoogleGenerativeAIFetchError) {
-    return err.status === undefined || err.status === 429 || err.status >= 500;
-  }
-  return false;
+  // Délai dépassé ou coupure réseau (pas de statut HTTP)
+  const e = err as Error;
+  return (
+    e?.name === 'AbortError' ||
+    e?.name === 'TimeoutError' ||
+    /timeout|timed out|fetch failed|ECONNRESET|ETIMEDOUT|network/i.test(
+      e?.message ?? '',
+    )
+  );
 }
 
 @Injectable()
 export class AiService {
   private readonly logger = new Logger(AiService.name);
-  private readonly model: GenerativeModel;
+  private readonly ai: GoogleGenAI;
+  private readonly model: string;
+  private readonly generationConfig: GenerateContentConfig;
 
   constructor(
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
   ) {
-    const genAI = new GoogleGenerativeAI(this.config.ai.geminiApiKey);
-    const { model, timeoutMs, thinkingBudget, maxOutputTokens } =
+    const { geminiApiKey, model, timeoutMs, thinkingBudget, maxOutputTokens } =
       this.config.ai;
-
-    // thinkingConfig n'est pas typé par le SDK 0.24 mais transmis tel quel à l'API
-    const generationConfig: GenerationConfig & {
-      thinkingConfig?: { thinkingBudget: number };
-    } = {
+    this.ai = new GoogleGenAI({ apiKey: geminiApiKey });
+    this.model = model;
+    this.generationConfig = {
+      systemInstruction: SYSTEM_INSTRUCTION,
       responseMimeType: 'application/json',
       responseSchema: RESPONSE_SCHEMA,
-      temperature: 0.4,
+      // Basse : une médiation doit être constante, pas créative
+      temperature: 0.2,
       // Plafond de sortie (raisonnement compris) : borne le coût d'un appel
       maxOutputTokens,
+      // Raisonnement interne, facturé comme de la sortie. 0 = désactivé ; null = le modèle décide.
+      ...(thinkingBudget !== null
+        ? { thinkingConfig: { thinkingBudget } }
+        : {}),
+      httpOptions: { timeout: timeoutMs },
     };
-    // Raisonnement interne du modèle, facturé comme de la sortie.
-    // 0 = désactivé ; null = le modèle décide.
-    if (thinkingBudget !== null) {
-      generationConfig.thinkingConfig = { thinkingBudget };
-    }
+  }
 
-    this.model = genAI.getGenerativeModel(
-      { model, systemInstruction: SYSTEM_INSTRUCTION, generationConfig },
-      { timeout: timeoutMs },
-    );
+  /** Un appel au modèle. Retourne le texte brut et les tokens facturés. */
+  private async callModel(
+    payload: string,
+  ): Promise<{ text: string | undefined; usage: AiUsage }> {
+    const response = await this.ai.models.generateContent({
+      model: this.model,
+      contents: payload,
+      config: this.generationConfig,
+    });
+    const meta = response.usageMetadata;
+    return {
+      text: response.text,
+      usage: {
+        inputTokens: meta?.promptTokenCount ?? 0,
+        // Réponse + raisonnement : tous deux facturés au tarif sortie
+        outputTokens:
+          (meta?.candidatesTokenCount ?? 0) + (meta?.thoughtsTokenCount ?? 0),
+      },
+    };
   }
 
   async processUserMessage(context: AiContext): Promise<AiDraftResult> {
@@ -259,14 +301,11 @@ export class AiService {
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        const result = await this.model.generateContent(payload);
-        const meta = result.response.usageMetadata;
-        const input = meta?.promptTokenCount ?? 0;
-        usage.inputTokens += input;
-        // total - prompt = sortie + raisonnement, tous deux facturés au tarif sortie
-        usage.outputTokens += Math.max(0, (meta?.totalTokenCount ?? 0) - input);
+        const call = await this.callModel(payload);
+        usage.inputTokens += call.usage.inputTokens;
+        usage.outputTokens += call.usage.outputTokens;
 
-        const parsed = parseAiResponse(result.response.text());
+        const parsed = parseAiResponse(call.text ?? '');
 
         if (parsed.outOfScope || parsed.contentRefused) {
           // Rien n'est transmis : le draft actuel reste tel quel
@@ -278,6 +317,20 @@ export class AiService {
             notice: parsed.contentRefused ? 'content_refused' : 'out_of_scope',
             usage,
           };
+        }
+        // Généralisation accusatrice malgré le prompt → on refait une fois ;
+        // au dernier essai on accepte (une nuance de style ne bloque jamais l'utilisateur)
+        if (
+          attempt < MAX_ATTEMPTS &&
+          hasAccusatoryGeneralization(
+            parsed.realMessage,
+            context.targetLanguage,
+          )
+        ) {
+          this.logger.warn(
+            `Généralisation accusatrice détectée (essai ${attempt}) — nouvel essai`,
+          );
+          continue;
         }
         return {
           objectiveMessage: parsed.objectiveMessage,

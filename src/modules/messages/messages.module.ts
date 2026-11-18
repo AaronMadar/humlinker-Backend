@@ -4,8 +4,6 @@ import { UsersModule } from '../users/users.module';
 import { MailModule } from '../../integrations/mail/mail.module';
 import { MessagesController } from './messages.controller';
 import { MessagesService } from './messages.service';
-import { WebhookService } from './services/webhook.service';
-import { WebhookController } from './services/webhook.controller';
 import {
   PrismaChatMessageRepository,
   PrismaDraftRepository,
@@ -19,10 +17,9 @@ import {
     forwardRef(() => UsersModule),
     MailModule,
   ],
-  controllers: [MessagesController, WebhookController],
+  controllers: [MessagesController],
   providers: [
     MessagesService,
-    WebhookService,
     PrismaChatMessageRepository,
     PrismaDraftRepository,
     {

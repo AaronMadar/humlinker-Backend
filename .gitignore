@@ -67,3 +67,5 @@ jest-cache/
 # package-lock.json
 # yarn.lock
 # pnpm-lock.yaml
+# Rapports de l'évaluation IA (npm run eval:ai)
+test/ai-eval/reports/

@@ -62,6 +62,7 @@ interface TargetCtxCache {
 
 const EMPTY_DRAFT_OBJECTIVE = 'Rien à transmettre pour le moment.';
 const CHAT_HISTORY_LIMIT = 30;
+const MAX_PAGE_SIZE = 100;
 const SENT_DRAFTS_CONTEXT = 10;
 /** Versions du draft actif en cache Redis (objectiveMessage + realMessage) */
 const DRAFT_VERSIONS_KEY = (id: string) => `draft-versions:${id}`;
@@ -112,7 +113,7 @@ export class MessagesService {
     private readonly quotaService: QuotaService,
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
-  ) { }
+  ) {}
 
   // ─── Cache Redis ──────────────────────────────────────────────────────────
 
@@ -130,7 +131,10 @@ export class MessagesService {
       return JSON.parse(cached) as TargetCtxCache;
     }
     const ctx: TargetCtxCache = {
-      name: [humlinker.target.firstName, humlinker.target.lastName].filter(Boolean).join(' ') || 'le destinataire',
+      name:
+        [humlinker.target.firstName, humlinker.target.lastName]
+          .filter(Boolean)
+          .join(' ') || 'le destinataire',
       language: humlinker.target.language,
     };
     await this.redisService.set(key, JSON.stringify(ctx), TARGET_CTX_TTL);
@@ -148,10 +152,15 @@ export class MessagesService {
     userId: string,
     options: { limit?: number; offset?: number } = {},
   ): Promise<ChatResponse> {
-    const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
+    // Contrôle d'accès : lève 403/404 si l'utilisateur n'est pas participant
+    await this.getHumlinkerOrThrow(humhlinkerId, userId);
 
-    const limit = options.limit ?? CHAT_HISTORY_LIMIT;
-    const offset = options.offset ?? 0;
+    // Pagination bornée (un limit énorme chargerait tout l'historique en mémoire)
+    const limit = Math.min(
+      Math.max(1, options.limit || CHAT_HISTORY_LIMIT),
+      MAX_PAGE_SIZE,
+    );
+    const offset = Math.max(0, options.offset || 0);
 
     // On charge limit+1 pour savoir s'il y a une page suivante
     const messages = await this.chatMessageRepository.findByHumlinker(
@@ -163,7 +172,8 @@ export class MessagesService {
     const sliced = hasMore ? messages.slice(0, limit) : messages;
 
     // Draft actif — on ne retourne PAS le realMessage
-    const activeDraft = await this.draftRepository.findActiveDraft(humhlinkerId);
+    const activeDraft =
+      await this.draftRepository.findActiveDraft(humhlinkerId);
 
     const draftVersions = await this.listDraftVersionObjectives(humhlinkerId);
 
@@ -211,11 +221,13 @@ export class MessagesService {
       humhlinkerId,
       SENT_DRAFTS_CONTEXT,
     );
-    const currentDraft = await this.draftRepository.findActiveDraft(humhlinkerId);
+    const currentDraft =
+      await this.draftRepository.findActiveDraft(humhlinkerId);
 
-    const senderName = [humlinker.sender.firstName, humlinker.sender.lastName]
-      .filter(Boolean)
-      .join(' ') || 'L\'expéditeur';
+    const senderName =
+      [humlinker.sender.firstName, humlinker.sender.lastName]
+        .filter(Boolean)
+        .join(' ') || "L'expéditeur";
 
     const targetCtx = await this.getTargetCtx(humhlinkerId, humlinker);
 
@@ -242,7 +254,12 @@ export class MessagesService {
       }
       throw err;
     }
-    await this.quotaService.recordAi(userId, quotaType, humhlinkerId, aiResult.usage);
+    await this.quotaService.recordAi(
+      userId,
+      quotaType,
+      humhlinkerId,
+      aiResult.usage,
+    );
 
     // 3. Sauvegarde le message de l'utilisateur (seulement après succès)
     await this.chatMessageRepository.create({
@@ -271,7 +288,8 @@ export class MessagesService {
       }
     } else {
       // Pas de changement de draft → on garde le draft actuel ou on crée un vide
-      updatedDraft = currentDraft ?? (await this.createEmptyDraft(humhlinkerId, 1));
+      updatedDraft =
+        currentDraft ?? (await this.createEmptyDraft(humhlinkerId, 1));
     }
 
     // 5. Pousse la nouvelle version dans le cache Redis
@@ -282,7 +300,10 @@ export class MessagesService {
       });
     }
 
-    return { activeDraft: this.toSafeDraft(updatedDraft), notice: aiResult.notice };
+    return {
+      activeDraft: this.toSafeDraft(updatedDraft),
+      notice: aiResult.notice,
+    };
   }
 
   // ─── Restauration d'une version précédente du draft ──────────────────────
@@ -307,13 +328,15 @@ export class MessagesService {
     const selected = versions[versionIndex];
 
     // Restaure directement depuis le cache — pas d'appel IA
-    const activeDraft = await this.draftRepository.findActiveDraft(humhlinkerId);
+    const activeDraft =
+      await this.draftRepository.findActiveDraft(humhlinkerId);
     let updatedDraft: Draft;
     if (activeDraft) {
-      updatedDraft = (await this.draftRepository.update(activeDraft._id, {
-        objectiveMessage: selected.objectiveMessage,
-        realMessage: selected.realMessage,
-      })) ?? activeDraft;
+      updatedDraft =
+        (await this.draftRepository.update(activeDraft._id, {
+          objectiveMessage: selected.objectiveMessage,
+          realMessage: selected.realMessage,
+        })) ?? activeDraft;
     } else {
       updatedDraft = await this.draftRepository.create({
         humhlinkerId,
@@ -325,7 +348,7 @@ export class MessagesService {
 
     return {
       activeDraft: this.toSafeDraft(updatedDraft),
-      draftVersions: versions.map(v => v.objectiveMessage),
+      draftVersions: versions.map((v) => v.objectiveMessage),
     };
   }
 
@@ -342,22 +365,24 @@ export class MessagesService {
    * 6. Crée un nouveau draft vide pour la prochaine itération
    * 7. Retourne le nouveau draft vide (bouton Send inactif)
    */
-  async sendDraft(
-    humhlinkerId: string,
-    userId: string,
-  ): Promise<SafeDraft> {
+  async sendDraft(humhlinkerId: string, userId: string): Promise<SafeDraft> {
     const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
     this.assertNotBlocked(humlinker);
 
-    const activeDraft = await this.draftRepository.findActiveDraft(humhlinkerId);
-    if (!activeDraft || activeDraft.objectiveMessage === EMPTY_DRAFT_OBJECTIVE) {
+    const activeDraft =
+      await this.draftRepository.findActiveDraft(humhlinkerId);
+    if (
+      !activeDraft ||
+      activeDraft.objectiveMessage === EMPTY_DRAFT_OBJECTIVE
+    ) {
       throw new NotFoundException('Aucun message à envoyer.');
     }
 
     // Quotas d'envoi : les réponses (humlinker reçu) ne sont pas limitées ici,
     // elles le sont déjà par le quota ai_reply.
     const emailsPlaceholder =
-      humlinker.target.isPlaceholder && humlinker.communicationChannel === 'email';
+      humlinker.target.isPlaceholder &&
+      humlinker.communicationChannel === 'email';
     if (humlinker.isInitiator) {
       await this.quotaService.assertCanUse(userId, 'message_sent');
     }
@@ -383,7 +408,11 @@ export class MessagesService {
       await this.quotaService.record(userId, 'message_sent', humhlinkerId);
     }
     if (emailsPlaceholder && humlinker.target.email) {
-      await this.quotaService.record(userId, 'email_to_placeholder', humhlinkerId);
+      await this.quotaService.record(
+        userId,
+        'email_to_placeholder',
+        humhlinkerId,
+      );
     }
 
     // 5. Humlinker → active + lastActivityAt
@@ -399,116 +428,6 @@ export class MessagesService {
     const newDraft = await this.createEmptyDraft(humhlinkerId, nextVersion);
 
     return this.toSafeDraft(newDraft);
-  }
-
-  // ─── Réception d'une réponse du target (appelé par WebhookService) ────────
-
-  /**
-   * Traite un message entrant du target (reçu via webhook Twilio).
-   * Appelé depuis WebhookService après identification du mirror humlinker.
-   *
-   * 1. Sauvegarde le message du target dans le mirror humlinker
-   * 2. L'IA génère le draft côté mirror (objectiveMessage + realMessage)
-   * 3. Notifie le sender original : WebSocket + FCM
-   */
-  async processIncomingTargetMessage(
-    mirrorHumhlinkerId: string,
-    targetRawMessage: string,
-    senderUserId: string, // userId du sender original à notifier
-    senderFcmToken: string | null,
-    senderName: string,
-  ): Promise<void> {
-    // 1. Sauvegarde le message brut du target dans le mirror
-    await this.chatMessageRepository.create({
-      humhlinkerId: mirrorHumhlinkerId,
-      role: 'user',
-      type: 'text',
-      content: targetRawMessage,
-    });
-
-    // 2. Génération du draft côté mirror
-    const mirrorHumlinker = await this.humlinkerRepository.findById(mirrorHumhlinkerId);
-    if (!mirrorHumlinker) return;
-
-    // ─── Stockage de la réponse du target dans le chat du SENDER ────────────
-    // Quand le target répond, le sender doit voir cette réponse dans son propre
-    // chat (type: 'target_reply') afin que l'IA en tienne compte au prochain message.
-    if (mirrorHumlinker.mirrorId) {
-      await this.chatMessageRepository.create({
-        humhlinkerId: mirrorHumlinker.mirrorId, // chat original du sender
-        role: 'system',
-        type: 'target_reply',
-        content: targetRawMessage,
-      });
-    }
-
-    const chatHistory = await this.chatMessageRepository.findByHumlinker(
-      mirrorHumhlinkerId,
-      { limit: 50 },
-    );
-    const lastSentDrafts = await this.draftRepository.findLastSentDrafts(
-      mirrorHumhlinkerId,
-      SENT_DRAFTS_CONTEXT,
-    );
-    const currentDraft = await this.draftRepository.findActiveDraft(mirrorHumhlinkerId);
-
-    const mirrorSenderName = [mirrorHumlinker.sender.firstName, mirrorHumlinker.sender.lastName]
-      .filter(Boolean)
-      .join(' ') || 'L\'expéditeur';
-
-    const mirrorTargetCtx = await this.getTargetCtx(mirrorHumhlinkerId, mirrorHumlinker);
-
-    const aiResult = await this.aiService.processUserMessage({
-      senderName: mirrorSenderName,
-      targetName: mirrorTargetCtx.name,
-      senderLanguage: mirrorHumlinker.sender.language,
-      targetLanguage: mirrorTargetCtx.language,
-      relationshipType: mirrorHumlinker.relationshipType,
-      lastSentDrafts,
-      chatHistory,
-      currentDraft,
-      newMessage: targetRawMessage,
-    });
-
-    // Mise à jour du draft miroir
-    if (aiResult.draftChanged) {
-      if (currentDraft) {
-        await this.draftRepository.update(currentDraft._id, {
-          objectiveMessage: aiResult.objectiveMessage,
-          realMessage: aiResult.realMessage,
-        });
-      } else {
-        await this.draftRepository.create({
-          humhlinkerId: mirrorHumhlinkerId,
-          objectiveMessage: aiResult.objectiveMessage,
-          realMessage: aiResult.realMessage,
-          version: 1,
-        });
-      }
-    }
-
-    // 3. Notifie le sender original du réel message reçu (realMessage du target)
-    // Le sender reçoit directement le realMessage (pas l'objectiveMessage du target)
-    await this.notificationsService.notifyNewMessage(
-      senderUserId,
-      senderFcmToken,
-      {
-        humhlinkerId: mirrorHumlinker.mirrorId ?? mirrorHumhlinkerId,
-        senderName,
-        messagePreview: aiResult.realMessage,
-      },
-    );
-
-    // Mise à jour lastActivityAt des deux côtés
-    await this.humlinkerRepository.update(mirrorHumhlinkerId, {
-      lastActivityAt: new Date(),
-      status: mirrorHumlinker.status === 'pending' ? 'active' : undefined,
-    });
-    if (mirrorHumlinker.mirrorId) {
-      await this.humlinkerRepository.update(mirrorHumlinker.mirrorId, {
-        lastActivityAt: new Date(),
-      });
-    }
   }
 
   // ─── Utilitaires privés ───────────────────────────────────────────────────
@@ -533,26 +452,46 @@ export class MessagesService {
 
   // ─── Helpers versions cache ──────────────────────────────────────────────
 
-  private async pushDraftVersion(humhlinkerId: string, version: DraftVersion): Promise<void> {
+  private async pushDraftVersion(
+    humhlinkerId: string,
+    version: DraftVersion,
+  ): Promise<void> {
     const key = DRAFT_VERSIONS_KEY(humhlinkerId);
     const versions = await this.listDraftVersions(humhlinkerId);
     // Déduplique : ignore si identique à la dernière version
-    if (versions.length > 0 && versions[versions.length - 1].objectiveMessage === version.objectiveMessage) return;
+    if (
+      versions.length > 0 &&
+      versions[versions.length - 1].objectiveMessage ===
+        version.objectiveMessage
+    )
+      return;
     versions.push(version);
     if (versions.length > MAX_DRAFT_VERSIONS) versions.shift();
-    await this.redisService.set(key, JSON.stringify(versions), DRAFT_VERSIONS_TTL);
+    await this.redisService.set(
+      key,
+      JSON.stringify(versions),
+      DRAFT_VERSIONS_TTL,
+    );
   }
 
-  private async listDraftVersions(humhlinkerId: string): Promise<DraftVersion[]> {
+  private async listDraftVersions(
+    humhlinkerId: string,
+  ): Promise<DraftVersion[]> {
     const key = DRAFT_VERSIONS_KEY(humhlinkerId);
     const raw = await this.redisService.get(key);
     if (!raw) return [];
-    try { return JSON.parse(raw) as DraftVersion[]; } catch { return []; }
+    try {
+      return JSON.parse(raw) as DraftVersion[];
+    } catch {
+      return [];
+    }
   }
 
-  private async listDraftVersionObjectives(humhlinkerId: string): Promise<string[]> {
+  private async listDraftVersionObjectives(
+    humhlinkerId: string,
+  ): Promise<string[]> {
     const versions = await this.listDraftVersions(humhlinkerId);
-    return versions.map(v => v.objectiveMessage);
+    return versions.map((v) => v.objectiveMessage);
   }
 
   /**
@@ -569,9 +508,10 @@ export class MessagesService {
     realMessage: string,
   ): Promise<void> {
     const { targetId } = humlinker;
-    const senderName = [humlinker.sender.firstName, humlinker.sender.lastName]
-      .filter(Boolean)
-      .join(' ') || "Quelqu'un";
+    const senderName =
+      [humlinker.sender.firstName, humlinker.sender.lastName]
+        .filter(Boolean)
+        .join(' ') || "Quelqu'un";
 
     // Cas 1 : target inscrit -> app uniquement
     if (!humlinker.target.isPlaceholder) {
@@ -640,4 +580,3 @@ export class MessagesService {
     };
   }
 }
-
