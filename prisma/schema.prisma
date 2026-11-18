@@ -28,6 +28,12 @@ enum UserPlaceholderSource {
   manual
 }
 
+/// Offre de l'utilisateur. Les limites de chaque offre sont dans src/modules/billing/plans.config.ts
+enum PlanTier {
+  free
+  pro
+}
+
 model User {
   id                String                 @id @default(uuid())
   role              UserRole               @default(user)
@@ -52,12 +58,18 @@ model User {
   /// Mis à jour à chaque login / ouverture de l'app.
   fcmToken String?
 
+  /// Offre actuelle (free par défaut). Mise à jour par Stripe à l'étape paiement.
+  plan          PlanTier  @default(free)
+  /// Fin de la période payée — au-delà, l'utilisateur repasse automatiquement en free.
+  planExpiresAt DateTime?
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   lastLoginAt DateTime?
 
-  sentHumlinkers     Humlinker[] @relation("HumlinkerSender")
-  receivedHumlinkers Humlinker[] @relation("HumlinkerTarget")
+  sentHumlinkers     Humlinker[]   @relation("HumlinkerSender")
+  receivedHumlinkers Humlinker[]   @relation("HumlinkerTarget")
+  usageRecords       UsageRecord[]
 
   @@map("users")
 }
@@ -65,10 +77,10 @@ model User {
 // ─── Humlinker ────────────────────────────────────────────────────────────────
 
 enum HumlinkerStatus {
-  pending  // créé, aucun message envoyé
-  active   // au moins un message échangé
+  pending // créé, aucun message envoyé
+  active // au moins un message échangé
   archived // archivé par l'utilisateur
-  blocked  // bloqué
+  blocked // bloqué
 }
 
 enum HumlinkerChannel {
@@ -84,7 +96,7 @@ model Humlinker {
   mirrorId    String?         @unique
   isInitiator Boolean         @default(true)
   status      HumlinkerStatus @default(pending)
-  blockedBy String?
+  blockedBy   String?
 
   communicationChannel HumlinkerChannel @default(app)
   targetContactName    String
@@ -155,4 +167,38 @@ model ChatMessage {
 
   @@index([humhlinkerId, createdAt(sort: Desc)])
   @@map("chat_messages")
+}
+
+// ─── Usage (quotas + suivi des coûts) ─────────────────────────────────────────
+
+enum UsageType {
+  /// Reformulation IA dans un humlinker que l'utilisateur a lancé
+  ai_reformulation
+  /// Reformulation IA d'une réponse, dans un humlinker lancé par quelqu'un d'autre
+  ai_reply
+  /// Draft envoyé au destinataire (humlinker lancé par l'utilisateur)
+  message_sent
+  /// Email envoyé à un destinataire non inscrit
+  email_to_placeholder
+  /// SMS de vérification (OTP) — userId null (avant inscription)
+  sms_otp
+}
+
+/// Une ligne par action coûteuse : sert à compter les quotas ET à suivre la marge.
+model UsageRecord {
+  id           String    @id @default(uuid())
+  userId       String?
+  type         UsageType
+  humhlinkerId String?
+  inputTokens  Int?
+  outputTokens Int?
+  /// Coût estimé en micro-dollars (1 $ = 1 000 000)
+  costMicroUsd Int       @default(0)
+  createdAt    DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, type, createdAt])
+  @@index([type, createdAt])
+  @@map("usage_records")
 }

@@ -3,6 +3,7 @@ import { FakeRedisService } from '@/redis/redis.service.fake';
 import type { RedisService } from '@/redis/redis.service';
 import type { MailService } from '@/integrations/mail/mail.service';
 import type { SmsService } from '@/integrations/sms/sms.service';
+import type { QuotaService } from '@/modules/billing/quota.service';
 import { OtpService } from './otp.service';
 
 describe('OtpService', () => {
@@ -22,6 +23,7 @@ describe('OtpService', () => {
       redis as unknown as RedisService,
       mail as unknown as MailService,
       sms as unknown as SmsService,
+      { consumeSms: jest.fn().mockResolvedValue(undefined) } as unknown as QuotaService,
     );
   });
 

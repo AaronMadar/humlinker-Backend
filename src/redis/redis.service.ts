@@ -60,7 +60,16 @@ export class RedisService implements OnModuleDestroy {
     key: string,
     ttlSeconds: number,
   ): Promise<{ count: number; ttl: number }> {
-    const results = await this.client.multi().incr(key).ttl(key).exec();
+    return this.incrByWithTtl(key, 1, ttlSeconds);
+  }
+
+  /** Comme incrWithTtl, mais ajoute `amount` (ex : coût en micro-dollars). */
+  async incrByWithTtl(
+    key: string,
+    amount: number,
+    ttlSeconds: number,
+  ): Promise<{ count: number; ttl: number }> {
+    const results = await this.client.multi().incrby(key, amount).ttl(key).exec();
     const count = Number(results?.[0]?.[1] ?? 0);
     let ttl = Number(results?.[1]?.[1] ?? -1);
     // Clé neuve (ou sans expiration) → on pose la fenêtre

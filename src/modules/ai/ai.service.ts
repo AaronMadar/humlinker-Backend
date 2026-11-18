@@ -14,10 +14,19 @@ import { APP_CONFIG } from '../../config';
 import configuration from '../../config/configuration';
 import type { ChatMessage, Draft } from '../humlinker/entities';
 
+export interface AiUsage {
+  /** Tokens envoyés au modèle (prompt) */
+  inputTokens: number;
+  /** Tokens facturés en sortie (réponse + raisonnement interne du modèle) */
+  outputTokens: number;
+}
+
 export interface AiDraftResult {
   objectiveMessage: string;
   realMessage: string;
   draftChanged: boolean;
+  /** Consommation réelle de l'appel — sert au calcul du coût */
+  usage: AiUsage;
 }
 
 export interface AiContext {
@@ -67,6 +76,13 @@ export class AiService {
     try {
       const result = await this.model.generateContent(prompt);
       const text = result.response.text();
+      const meta = result.response.usageMetadata;
+      const inputTokens = meta?.promptTokenCount ?? 0;
+      const usage: AiUsage = {
+        inputTokens,
+        // total - prompt = sortie + tokens de « réflexion », tous facturés au tarif sortie
+        outputTokens: Math.max(0, (meta?.totalTokenCount ?? 0) - inputTokens),
+      };
       const parsed = JSON.parse(text) as {
         objectiveMessage: string;
         realMessage: string;
@@ -79,6 +95,7 @@ export class AiService {
           objectiveMessage: context.currentDraft?.objectiveMessage ?? 'Rien a transmettre pour le moment.',
           realMessage: context.currentDraft?.realMessage ?? '',
           draftChanged: false,
+          usage,
         };
       }
 
@@ -86,6 +103,7 @@ export class AiService {
         objectiveMessage: parsed.objectiveMessage,
         realMessage: parsed.realMessage,
         draftChanged: parsed.draftChanged,
+        usage,
       };
     } catch (err) {
       this.logger.error('Erreur Gemini generateContent', err);

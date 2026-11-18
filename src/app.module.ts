@@ -34,6 +34,7 @@ import { JobsModule } from './jobs';
 import {
   AiModule,
   AuthModule,
+  BillingModule,
   HumlinkerModule,
   MessagesModule,
   HealthModule,
@@ -49,6 +50,7 @@ import {
     EventEmitterModule.forRoot({ wildcard: false, global: true }),
     AiModule,             // @Global() — AiService disponible partout
     NotificationsModule,  // @Global() — WebSocket Gateway + FCM disponibles partout
+    BillingModule,        // @Global() — QuotaService (offres, quotas, budgets)
     JobsModule,
     AuthModule,
     HealthModule,

@@ -46,6 +46,7 @@ import {
 } from './repositories';
 import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 import { RedisService } from '../../redis/redis.service';
+import { QuotaService } from '../billing/quota.service';
 
 /** Durée de vie du cache target-ctx : 7 jours */
 const TARGET_CTX_TTL = 60 * 60 * 24 * 7;
@@ -104,6 +105,7 @@ export class MessagesService {
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
     private readonly redisService: RedisService,
+    private readonly quotaService: QuotaService,
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
   ) { }
@@ -187,6 +189,15 @@ export class MessagesService {
     const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
     this.assertNotBlocked(humlinker);
 
+    // 0. Quotas AVANT tout appel coûteux. L'IA est médiatrice des deux côtés :
+    //    humlinker lancé par l'utilisateur → ai_reformulation,
+    //    réponse dans un humlinker reçu   → ai_reply (quota séparé, plus large).
+    const quotaType = humlinker.isInitiator ? 'ai_reformulation' : 'ai_reply';
+    await this.quotaService.assertCanUse(userId, quotaType, {
+      messageLength: content.length,
+    });
+    await this.quotaService.assertAiBudget();
+
     // 1. Sauvegarde le message de l'utilisateur
     await this.chatMessageRepository.create({
       humhlinkerId,
@@ -226,6 +237,7 @@ export class MessagesService {
 
     // 3. Appel Gemini
     const aiResult = await this.aiService.processUserMessage(aiContext);
+    await this.quotaService.recordAi(userId, quotaType, humhlinkerId, aiResult.usage);
 
     // 4. Mise à jour ou création du draft
     let updatedDraft: Draft;
@@ -329,6 +341,17 @@ export class MessagesService {
       throw new NotFoundException('Aucun message à envoyer.');
     }
 
+    // Quotas d'envoi : les réponses (humlinker reçu) ne sont pas limitées ici,
+    // elles le sont déjà par le quota ai_reply.
+    const emailsPlaceholder =
+      humlinker.target.isPlaceholder && humlinker.communicationChannel === 'email';
+    if (humlinker.isInitiator) {
+      await this.quotaService.assertCanUse(userId, 'message_sent');
+    }
+    if (emailsPlaceholder) {
+      await this.quotaService.assertCanUse(userId, 'email_to_placeholder');
+    }
+
     // 2. Marque le draft comme envoyé
     await this.draftRepository.markAsSent(activeDraft._id);
 
@@ -343,6 +366,12 @@ export class MessagesService {
 
     // 4. Envoie le realMessage au target selon le canal
     await this.dispatchToTarget(humlinker, activeDraft.realMessage);
+    if (humlinker.isInitiator) {
+      await this.quotaService.record(userId, 'message_sent', humhlinkerId);
+    }
+    if (emailsPlaceholder && humlinker.target.email) {
+      await this.quotaService.record(userId, 'email_to_placeholder', humhlinkerId);
+    }
 
     // 5. Humlinker → active + lastActivityAt
     const updateData: UpdateHumlinkerData = { lastActivityAt: new Date() };
