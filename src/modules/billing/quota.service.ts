@@ -46,9 +46,25 @@ export interface UsageSummary {
   maxMessageLength: number;
   quotas: Record<QuotaType, Record<QuotaPeriod, PeriodUsage>>;
   activeHumlinkers: { used: number; limit: number | null };
+  /** Abonnement Stripe (null si jamais abonné) */
+  subscription: {
+    status: string;
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd: string | null;
+  } | null;
 }
 
-type QuotaUser = Pick<User, '_id' | 'role' | 'plan' | 'planExpiresAt'>;
+type QuotaUser = Pick<
+  User,
+  | '_id'
+  | 'role'
+  | 'plan'
+  | 'planExpiresAt'
+  | 'subscriptionStatus'
+  | 'cancelAtPeriodEnd'
+  | 'currentPeriodStart'
+  | 'currentPeriodEnd'
+>;
 
 @Injectable()
 export class QuotaService {
@@ -84,15 +100,29 @@ export class QuotaService {
   private async loadUser(userId: string): Promise<QuotaUser> {
     const record = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, role: true, plan: true, planExpiresAt: true },
+      select: {
+        id: true,
+        role: true,
+        plan: true,
+        planExpiresAt: true,
+        subscriptionStatus: true,
+        cancelAtPeriodEnd: true,
+        currentPeriodStart: true,
+        currentPeriodEnd: true,
+      },
     });
     if (!record) throw new NotFoundException('Utilisateur introuvable.');
-    return {
-      _id: record.id,
-      role: record.role,
-      plan: record.plan,
-      planExpiresAt: record.planExpiresAt,
-    };
+    const { id, ...rest } = record;
+    return { _id: id, ...rest };
+  }
+
+  /**
+   * Ancre des quotas mensuels : pour un Pro, le jour de son abonnement
+   * (le quota repart chaque mois à cette date, y compris en formule annuelle).
+   * Pour le gratuit : le 1er du mois.
+   */
+  private monthAnchor(user: QuotaUser, plan: PlanTier): Date | null {
+    return plan === 'pro' ? user.currentPeriodStart : null;
   }
 
   // ─── Périodes ─────────────────────────────────────────────────────────────
@@ -100,6 +130,7 @@ export class QuotaService {
   static periodBounds(
     period: QuotaPeriod,
     now = new Date(),
+    monthAnchor: Date | null = null,
   ): { start: Date; resetAt: Date } {
     const y = now.getUTCFullYear();
     const m = now.getUTCMonth();
@@ -110,10 +141,39 @@ export class QuotaService {
         resetAt: new Date(start.getTime() + 24 * 60 * 60 * 1000),
       };
     }
+    if (monthAnchor && monthAnchor <= now) {
+      // Mois glissant ancré sur la date d'abonnement (ex : le 18 de chaque mois)
+      let months =
+        (y - monthAnchor.getUTCFullYear()) * 12 +
+        (m - monthAnchor.getUTCMonth());
+      let start = QuotaService.addMonths(monthAnchor, months);
+      if (start > now) start = QuotaService.addMonths(monthAnchor, --months);
+      return {
+        start,
+        resetAt: QuotaService.addMonths(monthAnchor, months + 1),
+      };
+    }
     return {
       start: new Date(Date.UTC(y, m, 1)),
       resetAt: new Date(Date.UTC(y, m + 1, 1)),
     };
+  }
+
+  /** anchor + n mois, jour borné à la fin du mois (31 janv. + 1 mois = 28/29 févr.). */
+  static addMonths(anchor: Date, n: number): Date {
+    const y = anchor.getUTCFullYear();
+    const m = anchor.getUTCMonth() + n;
+    const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    return new Date(
+      Date.UTC(
+        y,
+        m,
+        Math.min(anchor.getUTCDate(), lastDay),
+        anchor.getUTCHours(),
+        anchor.getUTCMinutes(),
+        anchor.getUTCSeconds(),
+      ),
+    );
   }
 
   private static dayKey(now = new Date()): string {
@@ -175,7 +235,11 @@ export class QuotaService {
     for (const period of ['day', 'month'] as const) {
       const limit = limits.quotas[type][period];
       if (limit === null) continue;
-      const { start, resetAt } = QuotaService.periodBounds(period);
+      const { start, resetAt } = QuotaService.periodBounds(
+        period,
+        new Date(),
+        this.monthAnchor(user, plan),
+      );
       const used = await this.countUsage(userId, type, start);
       if (used >= limit) {
         throw new QuotaExceededException({
@@ -297,7 +361,11 @@ export class QuotaService {
     for (const type of Object.keys(limits.quotas) as QuotaType[]) {
       quotas[type] = {} as Record<QuotaPeriod, PeriodUsage>;
       for (const period of ['day', 'month'] as const) {
-        const { start, resetAt } = QuotaService.periodBounds(period);
+        const { start, resetAt } = QuotaService.periodBounds(
+          period,
+          new Date(),
+          this.monthAnchor(user, plan),
+        );
         quotas[type][period] = {
           used: await this.countUsage(userId, type, start),
           limit: unlimited ? null : limits.quotas[type][period],
@@ -316,6 +384,13 @@ export class QuotaService {
         used: await this.countActiveInitiatedHumlinkers(userId),
         limit: unlimited ? null : limits.activeHumlinkers,
       },
+      subscription: user.subscriptionStatus
+        ? {
+            status: user.subscriptionStatus,
+            cancelAtPeriodEnd: user.cancelAtPeriodEnd,
+            currentPeriodEnd: user.currentPeriodEnd?.toISOString() ?? null,
+          }
+        : null,
     };
   }
 
