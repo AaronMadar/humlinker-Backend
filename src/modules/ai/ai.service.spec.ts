@@ -1,13 +1,11 @@
-import {
-  GoogleGenerativeAIAbortError,
-  GoogleGenerativeAIFetchError,
-} from '@google/generative-ai';
+import { ApiError } from '@google/genai';
 import type configuration from '@/config/configuration';
 import {
   AiInvalidResponseError,
   AiService,
   AiUnavailableException,
   buildAiPayload,
+  hasAccusatoryGeneralization,
   isRetriable,
   parseAiResponse,
   type AiContext,
@@ -123,13 +121,19 @@ describe('buildAiPayload — anti prompt-injection', () => {
 
 describe('isRetriable', () => {
   it('réessaie sur délai dépassé, 429, 5xx et réponse invalide', () => {
-    expect(isRetriable(new GoogleGenerativeAIAbortError('timeout'))).toBe(true);
-    expect(isRetriable(new GoogleGenerativeAIFetchError('x', 429))).toBe(true);
-    expect(isRetriable(new GoogleGenerativeAIFetchError('x', 503))).toBe(true);
+    expect(
+      isRetriable(
+        Object.assign(new Error('Request timed out'), { name: 'AbortError' }),
+      ),
+    ).toBe(true);
+    expect(isRetriable(new ApiError({ message: 'x', status: 429 }))).toBe(true);
+    expect(isRetriable(new ApiError({ message: 'x', status: 503 }))).toBe(true);
     expect(isRetriable(new AiInvalidResponseError('x'))).toBe(true);
   });
   it('ne réessaie pas une erreur définitive (400, clé invalide)', () => {
-    expect(isRetriable(new GoogleGenerativeAIFetchError('x', 400))).toBe(false);
+    expect(isRetriable(new ApiError({ message: 'x', status: 400 }))).toBe(
+      false,
+    );
     expect(isRetriable(new Error('autre'))).toBe(false);
   });
 });
@@ -145,10 +149,12 @@ describe('AiService.processUserMessage', () => {
     },
   } as unknown as ReturnType<typeof configuration>;
 
-  const reply = (text: string, prompt = 100, total = 150) => ({
-    response: {
-      text: () => text,
-      usageMetadata: { promptTokenCount: prompt, totalTokenCount: total },
+  const reply = (text: string, prompt = 100, output = 50) => ({
+    text,
+    usageMetadata: {
+      promptTokenCount: prompt,
+      candidatesTokenCount: output - 10,
+      thoughtsTokenCount: 10,
     },
   });
 
@@ -162,7 +168,7 @@ describe('AiService.processUserMessage', () => {
     }) as never);
     service = new AiService(config);
     generate = jest.fn();
-    (service as any).model = { generateContent: generate };
+    (service as any).ai = { models: { generateContent: generate } };
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -200,7 +206,7 @@ describe('AiService.processUserMessage', () => {
 
   it('ne réessaie pas une erreur définitive', async () => {
     generate.mockRejectedValue(
-      new GoogleGenerativeAIFetchError('bad key', 400),
+      new ApiError({ message: 'bad key', status: 400 }),
     );
     await expect(service.processUserMessage(ctx())).rejects.toBeInstanceOf(
       AiUnavailableException,
@@ -232,5 +238,57 @@ describe('AiService.processUserMessage', () => {
       objectiveMessage: 'Ancien objectif',
       realMessage: 'Ancien message',
     });
+  });
+
+  it('refait la réponse une fois si le message contient une généralisation accusatrice', async () => {
+    generate
+      .mockResolvedValueOnce(
+        reply(
+          good({
+            realMessage: "Léa vous dit que c'est toujours elle qui cuisine.",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        reply(
+          good({
+            realMessage: 'Léa vous fait savoir qu’elle a cuisiné ce week-end.',
+          }),
+        ),
+      );
+    const r = await service.processUserMessage(ctx());
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(r.realMessage).toContain('ce week-end');
+  });
+
+  it('au dernier essai, accepte la réponse plutôt que de bloquer l’utilisateur', async () => {
+    generate.mockResolvedValue(
+      reply(good({ realMessage: 'Léa vous dit que cela arrive souvent.' })),
+    );
+    const r = await service.processUserMessage(ctx());
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(r.realMessage).toContain('souvent');
+  });
+});
+
+describe('hasAccusatoryGeneralization', () => {
+  it('détecte les généralisations sans ambiguïté', () => {
+    expect(
+      hasAccusatoryGeneralization("comme d'habitude, rien n'est fait", 'fr'),
+    ).toBe(true);
+    expect(
+      hasAccusatoryGeneralization("c'est toujours elle qui paie", 'fr'),
+    ).toBe(true);
+    expect(hasAccusatoryGeneralization('des retards récurrents', 'fr')).toBe(
+      true,
+    );
+  });
+  it('n’accuse pas « toujours » au sens de « encore »', () => {
+    expect(
+      hasAccusatoryGeneralization('vous lui devez toujours 1 250 €', 'fr'),
+    ).toBe(false);
+  });
+  it('ne s’applique qu’aux langues configurées', () => {
+    expect(hasAccusatoryGeneralization('as usual', 'en')).toBe(false);
   });
 });

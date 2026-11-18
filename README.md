@@ -1,79 +1,105 @@
-# Humlinker Backend
+# Humlinker — Backend
 
-NestJS API with a layered, clean-architecture folder layout.
+API NestJS de Humlinker : deux personnes communiquent **uniquement par l'intermédiaire d'une IA médiatrice** qui reformule chaque message de façon neutre, fidèle et apaisée.
 
-## Structure
+**Stack** : NestJS 11 · PostgreSQL (Prisma 5) · Redis · Socket.io · Gemini (`@google/genai`) · Stripe · Firebase (push) · Twilio (SMS) · Nodemailer.
 
-```
-src/
-├── config/          # Environment and app configuration
-├── database/        # Database module (ORM, connections)
-├── common/          # Shared constants, interfaces, pipes, decorators
-├── guards/          # Route guards
-├── interceptors/    # Cross-cutting request/response handlers
-├── filters/         # Exception filters
-├── jobs/            # Scheduled and background tasks
-├── integrations/    # External service adapters
-└── modules/         # Feature modules
-```
+Plan de mise en production et avancement : [docs/PLAN_PRODUCTION.md](docs/PLAN_PRODUCTION.md).
 
-## Setup
+---
+
+## Démarrage local
 
 ```bash
 npm install
-```
-
-Copy `.env.example` to `.env` (PowerShell: `Copy-Item .env.example .env`) and configure `DATABASE_URL` and `JWT_SECRET`. The default database settings are:
-
-```text
-POSTGRES_USER=humlinker_user
-POSTGRES_DB=humlinker_db
-DATABASE_URL=postgresql://humlinker_user:humlinker_password@localhost:5432/humlinker_db?schema=public
-```
-
-`humlinker_user` is the PostgreSQL user; `humlinker_db` is the database name. Start PostgreSQL and Redis from the repository directory:
-
-```bash
+cp .env.example .env          # PowerShell : Copy-Item .env.example .env
 docker compose up -d postgres redis
-```
-
-Then generate Prisma Client and apply migrations:
-
-```bash
 npm run prisma:generate
-npm run prisma:migrate
-```
-
-## Run
-
-```bash
+npx prisma migrate deploy
 npm run start:dev
 ```
 
-API base path: `http://localhost:3000/api/v1`
+- API : `http://localhost:3000/api/v1` — documentation Swagger (hors production) : `http://localhost:3000/docs`
+- Si les ports 5432 / 6379 sont déjà pris sur votre machine, changez `POSTGRES_PORT`, `REDIS_PORT` **et** le port de `DATABASE_URL` dans `.env` (ex. 5433 / 6380), puis relancez `docker compose up -d`.
 
-### Health
+Toutes les variables sont documentées dans [.env.example](.env.example). En **production**, le serveur refuse de démarrer si une variable critique manque ou est restée à une valeur d'exemple (`src/config/env.validation.ts`).
 
-- `GET /api/v1/health` (public)
+---
 
-### Auth (public)
+## Architecture
 
-- `POST /api/v1/auth/register` — body: `RegisterUserDto`, returns `{ user, token }`
-- `POST /api/v1/auth/login` — body: `{ identifier, password }`, returns `{ user, token }`
+```
+src/
+├── config/          Configuration + validation des variables d'environnement
+├── common/          Rate limiting Redis (@RateLimit), adaptateur Socket.io CORS
+├── modules/
+│   ├── auth/        Inscription (OTP email + SMS), connexion, Google
+│   ├── users/       Profil, recherche par PIN (profil public uniquement)
+│   ├── humlinker/   Conversations (humlinker + miroir côté destinataire)
+│   ├── messages/    Chat avec l'IA, drafts, envoi au destinataire, WebSocket
+│   ├── ai/          IA médiatrice : prompt (ai.prompt.ts) + appel Gemini (ai.service.ts)
+│   ├── billing/     Offres, quotas, disjoncteurs de coûts, Stripe
+│   └── notifications/  Push FCM + temps réel
+└── integrations/    Email, SMS
+```
 
-### Users (JWT required)
+### IA médiatrice (`src/modules/ai`)
+- **Prompt** : `ai.prompt.ts` — source unique des règles de médiation (fidélité, désescalade, refus des menaces/harcèlement, ton formel, sécurité).
+- **Robustesse** : règles en instruction système, messages utilisateurs transmis comme **données JSON** (anti prompt-injection), schéma de réponse imposé + validation, délai max + nouvel essai, filet de sécurité contre les généralisations accusatrices.
+- Si l'IA échoue : rien n'est enregistré, le quota n'est pas décompté, l'utilisateur récupère son message (503 `AI_UNAVAILABLE`).
+- Réglages : `AI_MODEL`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`, `AI_THINKING_BUDGET` (0 par défaut : même qualité mesurée, 3,4× moins cher).
 
-- `GET /api/v1/users/me`
-- `GET /api/v1/users/:id`
-- `PATCH /api/v1/users/me`
-- `PATCH /api/v1/users/me/password`
-- `GET /api/v1/users/search?q=...&limit=10`
+### Offres, quotas et coûts (`src/modules/billing`)
+- Limites de chaque offre : **`plans.config.ts`** (source unique). L'IA étant médiatrice des deux côtés, les réponses dans un humlinker reçu ont leur propre quota (`ai_reply`).
+- Chaque action coûteuse est enregistrée dans `usage_records` avec son coût réel (tokens Gemini).
+- Disjoncteurs journaliers globaux : budget IA (`GLOBAL_DAILY_AI_BUDGET_USD`) et nombre de SMS (`GLOBAL_DAILY_SMS_LIMIT`), avec alerte email (`ADMIN_ALERT_EMAIL`).
+- Erreurs métier renvoyées avec un `code` stable (`QUOTA_EXCEEDED`, `HUMLINKER_LIMIT_REACHED`, `MESSAGE_TOO_LONG`, `SERVICE_BUDGET_EXCEEDED`, `AI_UNAVAILABLE`) que le front traduit.
 
-Send `Authorization: Bearer <token>` on protected routes.
+### Paiement Stripe
+- `POST /billing/checkout` (mensuel / annuel) → page Stripe Checkout ; `POST /billing/portal` → portail client.
+- `POST /billing/webhook` : signature vérifiée ; chaque événement relit l'abonnement chez Stripe (ordre et rejeu sans effet).
+- Sans clés Stripe (dev), le paiement est désactivé proprement (503 `BILLING_DISABLED`).
+- Tester en local : `stripe listen --forward-to localhost:3000/api/v1/billing/webhook`, carte `4242 4242 4242 4242`.
 
-## Test
+### Sécurité
+Rate limiting Redis global + par route, OTP durcis (5 essais, délai entre envois, plafond par numéro), blocage du login après 5 échecs, helmet, CORS limité à `FRONTEND_URL`, échappement HTML des emails, identifiants Stripe jamais exposés.
+
+---
+
+## Principales routes (`/api/v1`)
+
+| Domaine | Routes |
+|---|---|
+| Santé | `GET /health` |
+| Auth (publiques) | `POST /auth/send-otp/email`, `POST /auth/send-otp/phone?purpose=register\|reset-password`, `POST /auth/verify-otp`, `POST /auth/register`, `POST /auth/login`, `POST /auth/google`, `POST /auth/reset-password` |
+| Utilisateur | `GET/PATCH /users/me`, `PATCH /users/me/password`, `GET /users/search?q=<PIN>` |
+| Humlinkers | `POST /humlinkers`, `GET /humlinkers`, `PATCH /humlinkers/:id/(accept\|decline\|archive\|unarchive\|cancel\|block)` |
+| Messages | `GET/POST /humlinkers/:id/messages`, `PATCH /humlinkers/:id/draft`, `POST /humlinkers/:id/send` |
+| Offre | `GET /billing/usage`, `GET /billing/prices`, `POST /billing/checkout`, `POST /billing/portal`, `POST /billing/webhook` |
+
+Routes protégées : en-tête `Authorization: Bearer <token>`. Documentation complète : Swagger.
+
+---
+
+## Tests
 
 ```bash
-npm run test
-npm run test:e2e
+npm run test        # tests unitaires (sans services externes)
+npm run eval:ai     # évaluation de l'IA contre le vrai Gemini (~0,06 $)
 ```
+
+### Évaluation de l'IA (`test/ai-eval`)
+34 cas réels en 8 catégories (transmission, fidélité des détails, désescalade, mise à jour, hors sujet, refus, sécurité, langues), joués plusieurs fois et vérifiés automatiquement : bon résultat, faits conservés, insultes et généralisations absentes, tournure indirecte, jamais de « je » du Sender, bonne langue et forme de politesse.
+
+- `EVAL_RUNS=5 npm run eval:ai` pour plus de confiance, `EVAL_ONLY=C` pour une seule catégorie.
+- **À relancer après toute modification du prompt ou du modèle.** Ajouter un cas à chaque défaut constaté en production.
+- Dernier résultat (19/11/2026) : **340/340 conformes** sur 2 validations × 34 cas × 5 essais.
+
+---
+
+## Mise en production (rappel)
+
+- `NODE_ENV=production`, toutes les variables critiques renseignées (sinon refus de démarrer).
+- `npx prisma migrate deploy` à chaque déploiement (jamais `migrate dev`).
+- `TRUST_PROXY=1` derrière un reverse proxy, `FRONTEND_URL` en https.
+- Webhook Stripe configuré vers `https://<api>/api/v1/billing/webhook`.

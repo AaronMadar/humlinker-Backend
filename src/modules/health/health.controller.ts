@@ -9,7 +9,6 @@ export class HealthController {
   @Public()
   @Get()
   check(): ApiResponse<{ status: string }> {
-    console.log('🔥 HEALTH CONTROLLER HIT');
     return {
       success: true,
       data: { status: 'ok' },
