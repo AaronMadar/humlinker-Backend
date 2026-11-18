@@ -27,8 +27,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { ChatMessage, Draft, Humlinker } from '../humlinker/entities';
-import type { AiContext } from '../ai/ai.service';
-import { AiService } from '../ai/ai.service';
+import {
+  AiService,
+  AiUnavailableException,
+  type AiContext,
+  type AiNotice,
+} from '../ai/ai.service';
 import { MailService } from '../../integrations/mail/mail.service';
 import { APP_CONFIG } from '../../config';
 import configuration from '../../config/configuration';
@@ -185,7 +189,7 @@ export class MessagesService {
     humhlinkerId: string,
     userId: string,
     content: string,
-  ): Promise<{ activeDraft: SafeDraft }> {
+  ): Promise<{ activeDraft: SafeDraft; notice: AiNotice | null }> {
     const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
     this.assertNotBlocked(humlinker);
 
@@ -198,15 +202,7 @@ export class MessagesService {
     });
     await this.quotaService.assertAiBudget();
 
-    // 1. Sauvegarde le message de l'utilisateur
-    await this.chatMessageRepository.create({
-      humhlinkerId,
-      role: 'user',
-      type: 'text',
-      content,
-    });
-
-    // 2. Contexte IA
+    // 1. Contexte IA (historique AVANT le nouveau message, transmis à part)
     const chatHistory = await this.chatMessageRepository.findByHumlinker(
       humhlinkerId,
       { limit: 50 },
@@ -235,9 +231,26 @@ export class MessagesService {
       newMessage: content,
     };
 
-    // 3. Appel Gemini
-    const aiResult = await this.aiService.processUserMessage(aiContext);
+    // 2. Appel Gemini. En cas d'échec, RIEN n'est enregistré (ni message ni
+    //    quota) ; seul le coût déjà facturé par Google compte dans le budget global.
+    let aiResult: Awaited<ReturnType<AiService['processUserMessage']>>;
+    try {
+      aiResult = await this.aiService.processUserMessage(aiContext);
+    } catch (err) {
+      if (err instanceof AiUnavailableException) {
+        await this.quotaService.recordAiCostOnly(err.usage);
+      }
+      throw err;
+    }
     await this.quotaService.recordAi(userId, quotaType, humhlinkerId, aiResult.usage);
+
+    // 3. Sauvegarde le message de l'utilisateur (seulement après succès)
+    await this.chatMessageRepository.create({
+      humhlinkerId,
+      role: 'user',
+      type: 'text',
+      content,
+    });
 
     // 4. Mise à jour ou création du draft
     let updatedDraft: Draft;
@@ -269,7 +282,7 @@ export class MessagesService {
       });
     }
 
-    return { activeDraft: this.toSafeDraft(updatedDraft) };
+    return { activeDraft: this.toSafeDraft(updatedDraft), notice: aiResult.notice };
   }
 
   // ─── Restauration d'une version précédente du draft ──────────────────────

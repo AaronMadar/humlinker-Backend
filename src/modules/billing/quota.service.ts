@@ -339,6 +339,25 @@ export class QuotaService {
     );
   }
 
+  /**
+   * Coût d'un appel IA ÉCHOUÉ : compté dans le budget global (Google l'a facturé)
+   * mais pas dans le quota de l'utilisateur (il n'a rien obtenu).
+   */
+  async recordAiCostOnly(usage: {
+    inputTokens: number;
+    outputTokens: number;
+  }): Promise<void> {
+    const cost = aiCostMicroUsd(usage.inputTokens, usage.outputTokens);
+    if (cost <= 0) return;
+    await this.safeRedis(() =>
+      this.redis.incrByWithTtl(
+        `budget:ai:${QuotaService.dayKey()}`,
+        cost,
+        TWO_DAYS,
+      ),
+    );
+  }
+
   async record(
     userId: string,
     type: Extract<UsageType, 'message_sent' | 'email_to_placeholder'>,
