@@ -59,7 +59,16 @@ export class AuthService {
     await this.otpService.sendEmailOtp(email);
   }
 
-  async sendPhoneOtp(phoneNumber: string): Promise<void> {
+  async sendPhoneOtp(
+    phoneNumber: string,
+    purpose: string | undefined,
+  ): Promise<void> {
+    if (purpose === 'register') {
+      await this.assertNoDuplicates({ phoneNumber });
+    } else if (purpose !== 'reset-password') {
+      throw new BadRequestException('Contexte de vérification du téléphone invalide.');
+    }
+
     await this.otpService.sendPhoneOtp(phoneNumber);
   }
 

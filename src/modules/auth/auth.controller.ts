@@ -1,10 +1,18 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
   ApiBody,
+  ApiQuery,
 } from '@nestjs/swagger';
 import type { ApiResponse as AppApiResponse } from '@/common';
 import { Public } from '@/decorators';
@@ -55,12 +63,24 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Envoyer un OTP par SMS',
-    description: 'Envoie un code à 6 chiffres au numéro de téléphone fourni via Twilio (valable 5 min).',
+    description:
+      'Envoie un code à 6 chiffres au numéro de téléphone fourni via Twilio (valable 5 min). Le paramètre purpose doit être "register" ou "reset-password".',
+  })
+  @ApiQuery({
+    name: 'purpose',
+    enum: ['register', 'reset-password'],
+    required: true,
+    description:
+      'Pour "register", le numéro est vérifié comme non utilisé avant l’envoi. Pour "reset-password", un numéro déjà enregistré est autorisé.',
   })
   @ApiBody({ type: SendOtpPhoneDto })
   @ApiResponse({ status: 200, description: 'OTP envoyé avec succès.' })
-  async sendOtpPhone(@Body() dto: SendOtpPhoneDto): Promise<AppApiResponse<null>> {
-    await this.authService.sendPhoneOtp(dto.phoneNumber);
+  @ApiResponse({ status: 409, description: 'Numéro déjà utilisé pour une inscription.' })
+  async sendOtpPhone(
+    @Body() dto: SendOtpPhoneDto,
+    @Query('purpose') purpose: string | undefined,
+  ): Promise<AppApiResponse<null>> {
+    await this.authService.sendPhoneOtp(dto.phoneNumber, purpose);
     return { success: true, data: null, message: 'Code OTP envoyé par SMS.', timestamp: new Date().toISOString() };
   }
 

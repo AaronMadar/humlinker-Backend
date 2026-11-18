@@ -21,8 +21,25 @@ src/
 
 ```bash
 npm install
-cp .env.example .env
-# Configure DATABASE_URL and JWT_SECRET in .env
+```
+
+Copy `.env.example` to `.env` (PowerShell: `Copy-Item .env.example .env`) and configure `DATABASE_URL` and `JWT_SECRET`. The default database settings are:
+
+```text
+POSTGRES_USER=humlinker_user
+POSTGRES_DB=humlinker_db
+DATABASE_URL=postgresql://humlinker_user:humlinker_password@localhost:5432/humlinker_db?schema=public
+```
+
+`humlinker_user` is the PostgreSQL user; `humlinker_db` is the database name. Start PostgreSQL and Redis from the repository directory:
+
+```bash
+docker compose up -d postgres redis
+```
+
+Then generate Prisma Client and apply migrations:
+
+```bash
 npm run prisma:generate
 npm run prisma:migrate
 ```
