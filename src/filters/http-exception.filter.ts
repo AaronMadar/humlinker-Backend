@@ -27,6 +27,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
         ? exception.message
         : 'Internal server error';
 
+    // Erreurs métier enrichies (quotas…) : code stable + détails pour le front
+    const body =
+      exception instanceof HttpException ? exception.getResponse() : null;
+    const extra =
+      body && typeof body === 'object' && 'code' in body
+        ? {
+            code: (body as { code: string }).code,
+            details: (body as { details?: unknown }).details,
+          }
+        : {};
+
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(exception);
     }
@@ -35,6 +46,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       success: false,
       statusCode: status,
       message,
+      ...extra,
       path: request.url,
       timestamp: new Date().toISOString(),
     });

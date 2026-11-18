@@ -37,6 +37,7 @@ import { randomInt, timingSafeEqual } from 'crypto';
 import { MailService } from '@/integrations/mail/mail.service';
 import { SmsService } from '@/integrations/sms/sms.service';
 import { RedisService } from '@/redis/redis.service';
+import { QuotaService } from '@/modules/billing/quota.service';
 
 // Durée de vie du code OTP en secondes (5 minutes)
 const OTP_TTL_SECONDS = 5 * 60;
@@ -66,6 +67,7 @@ export class OtpService {
     private readonly redis: RedisService,
     private readonly mailService: MailService,
     private readonly smsService: SmsService,
+    private readonly quotaService: QuotaService,
   ) {}
 
   // ─── Génération ────────────────────────────────────────────────────────────
@@ -150,6 +152,8 @@ export class OtpService {
    */
   async sendPhoneOtp(phoneNumber: string): Promise<void> {
     await this.assertCanSend('phone', phoneNumber);
+    // Disjoncteur global : plafond de SMS/jour pour toute la plateforme
+    await this.quotaService.consumeSms();
     const code = this.generateCode();
     await this.storeCode('phone', phoneNumber, code);
     await this.smsService.sendOtp(phoneNumber, code);

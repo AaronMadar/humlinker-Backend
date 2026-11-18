@@ -6,7 +6,14 @@ import type { RedisService } from './redis.service';
 
 export class FakeRedisService implements Pick<
   RedisService,
-  'set' | 'get' | 'del' | 'exists' | 'incrWithTtl' | 'setIfAbsent' | 'ttl'
+  | 'set'
+  | 'get'
+  | 'del'
+  | 'exists'
+  | 'incrWithTtl'
+  | 'incrByWithTtl'
+  | 'setIfAbsent'
+  | 'ttl'
 > {
   private store = new Map<
     string,
@@ -45,12 +52,19 @@ export class FakeRedisService implements Pick<
   }
 
   async incrWithTtl(key: string, ttlSeconds: number) {
+    return this.incrByWithTtl(key, 1, ttlSeconds);
+  }
+
+  async incrByWithTtl(key: string, amount: number, ttlSeconds: number) {
     const entry = this.alive(key);
     if (!entry) {
-      this.store.set(key, { value: '1', expiresAt: this.now + ttlSeconds });
-      return { count: 1, ttl: ttlSeconds };
+      this.store.set(key, {
+        value: String(amount),
+        expiresAt: this.now + ttlSeconds,
+      });
+      return { count: amount, ttl: ttlSeconds };
     }
-    entry.value = String(Number(entry.value) + 1);
+    entry.value = String(Number(entry.value) + amount);
     return {
       count: Number(entry.value),
       ttl: (entry.expiresAt ?? this.now) - this.now,

@@ -16,6 +16,7 @@ import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 import type { User } from '../users/entities';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { QuotaService } from '../billing/quota.service';
 import { USER_PLACEHOLDER_UPGRADED, type UserPlaceholderUpgradedEvent } from '../../events';
 
 const PIN_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -31,6 +32,7 @@ export class HumlinkerService {
     private readonly usersRepository: UsersRepository,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
+    private readonly quotaService: QuotaService,
   ) {}
 
   async createHumlinker(senderId: string, dto: CreateHumlinkerDto): Promise<Humlinker> {
@@ -73,6 +75,8 @@ export class HumlinkerService {
     const existing = await this.humlinkerRepository.findBySenderAndTarget(senderId, targetUser._id);
     if (existing) {
       if (existing.status === 'archived') {
+        // Réactivation = un humlinker lancé de plus → soumis à la limite de l'offre
+        await this.quotaService.assertCanCreateHumlinker(senderId);
         // Réactivation : remet pending + corrige isInitiator
         const updated = await this.humlinkerRepository.update(existing._id, { status: 'pending', isInitiator: true });
         if (existing.mirrorId) {
@@ -85,6 +89,9 @@ export class HumlinkerService {
       }
       throw new ConflictException('Un humlinker existe déjà avec ce contact.');
     }
+
+    // Limite de humlinkers actifs lancés (offre gratuite : 3)
+    await this.quotaService.assertCanCreateHumlinker(senderId);
 
     const senderHumlinker = await this.humlinkerRepository.create({
       senderId,
@@ -153,6 +160,11 @@ export class HumlinkerService {
     if (!humlinker) throw new NotFoundException('Humlinker introuvable.');
     this.assertParticipant(humlinker, userId);
     if (humlinker.status !== 'archived') throw new BadRequestException("Ce humlinker n'est pas archivé.");
+    // Désarchiver un humlinker LANCÉ par l'utilisateur compte dans sa limite
+    // (sinon contournement : créer, archiver, recréer, tout désarchiver).
+    if (humlinker.isInitiator && humlinker.senderId === userId) {
+      await this.quotaService.assertCanCreateHumlinker(userId);
+    }
     const updated = await this.humlinkerRepository.update(humhlinkerId, { status: 'active' });
     return updated!;
   }

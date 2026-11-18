@@ -2,6 +2,8 @@ export type UserGender = 'male' | 'female' | 'other';
 
 export type UserAuthProvider = 'local' | 'google';
 
+export type PlanTier = 'free' | 'pro';
+
 export type UserPlaceholderSource = 'humlinker_invitation' | 'manual' | null;
 
 export interface User {
@@ -25,6 +27,11 @@ export interface User {
 
   /** Token FCM pour les push notifications */
   fcmToken: string | null;
+
+  /** Offre actuelle — voir src/modules/billing/plans.config.ts */
+  plan: PlanTier;
+  /** Fin de la période payée (null = pas d'expiration) */
+  planExpiresAt: Date | null;
 
   createdAt: Date;
   updatedAt: Date;

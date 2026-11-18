@@ -68,6 +68,28 @@ export class MailService {
   /**
    * Envoie un code OTP a l'adresse email fournie.
    */
+  /**
+   * Alerte technique envoyée à l'administrateur (ADMIN_ALERT_EMAIL).
+   * Ne lève jamais d'erreur : une alerte ratée ne doit pas casser la requête.
+   */
+  async sendAdminAlert(subject: string, body: string): Promise<void> {
+    const to = process.env.ADMIN_ALERT_EMAIL;
+    if (!to) {
+      this.logger.warn('ADMIN_ALERT_EMAIL non configuré — alerte non envoyée : ' + subject);
+      return;
+    }
+    try {
+      await this.transporter.sendMail({
+        from: this.config.mail.from,
+        to,
+        subject: '[Humlinker ALERTE] ' + subject,
+        text: body,
+      });
+    } catch (error) {
+      this.logger.error('Échec envoi alerte admin : ' + subject, error);
+    }
+  }
+
   async sendOtp(email: string, code: string): Promise<void> {
     try {
       await this.transporter.sendMail({

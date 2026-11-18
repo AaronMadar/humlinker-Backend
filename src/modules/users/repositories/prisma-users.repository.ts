@@ -27,6 +27,8 @@ function toUser(record: PrismaUser): User {
     isPlaceholder: record.isPlaceholder,
     placeholderSource: record.placeholderSource,
     fcmToken: record.fcmToken,
+    plan: record.plan,
+    planExpiresAt: record.planExpiresAt,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     lastLoginAt: record.lastLoginAt,
