@@ -5,13 +5,22 @@ import type { User } from '../modules/users/entities';
  * passwordHash : ne jamais exposer les credentials
  * fcmToken     : token device Firebase, privé au user, inutile côté client
  */
-export type SafeUser = Omit<User, 'passwordHash' | 'fcmToken'>;
+export type SafeUser = Omit<
+  User,
+  'passwordHash' | 'fcmToken' | 'stripeCustomerId' | 'stripeSubscriptionId'
+>;
 
 /**
  * Retire passwordHash et fcmToken avant de retourner un user au frontend.
  */
 export function sanitizeUser(user: User): SafeUser {
-  const { passwordHash: _pw, fcmToken: _fcm, ...safeUser } = user;
+  const {
+    passwordHash: _pw,
+    fcmToken: _fcm,
+    stripeCustomerId: _sc,
+    stripeSubscriptionId: _ss,
+    ...safeUser
+  } = user;
   return safeUser;
 }
 

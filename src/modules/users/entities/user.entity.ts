@@ -33,6 +33,14 @@ export interface User {
   /** Fin de la période payée (null = pas d'expiration) */
   planExpiresAt: Date | null;
 
+  /** Stripe — identifiants et état de l'abonnement */
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  subscriptionStatus: string | null;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodStart: Date | null;
+  currentPeriodEnd: Date | null;
+
   createdAt: Date;
   updatedAt: Date;
   lastLoginAt: Date | null;

@@ -20,6 +20,10 @@ const REQUIRED_IN_PRODUCTION = [
   'MAIL_PASSWORD',
   'TWILIO_ACCOUNT_SID',
   'TWILIO_AUTH_TOKEN',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_WEBHOOK_SECRET',
+  'STRIPE_PRICE_PRO_MONTHLY',
+  'STRIPE_PRICE_PRO_YEARLY',
 ] as const;
 
 /** Valeurs d'exemple de .env.example qui ne doivent jamais arriver en prod. */

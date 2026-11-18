@@ -13,6 +13,10 @@ const validProdEnv = {
   MAIL_PASSWORD: 'pass',
   TWILIO_ACCOUNT_SID: 'sid',
   TWILIO_AUTH_TOKEN: 'token',
+  STRIPE_SECRET_KEY: 'sk_live_key',
+  STRIPE_WEBHOOK_SECRET: 'whsec_secret',
+  STRIPE_PRICE_PRO_MONTHLY: 'price_month',
+  STRIPE_PRICE_PRO_YEARLY: 'price_year',
 } as NodeJS.ProcessEnv;
 
 describe('validateEnv', () => {

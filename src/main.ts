@@ -18,7 +18,10 @@ async function bootstrap() {
   // --- Variables d'environnement : bloquant en production si incomplet ---
   validateEnv();
 
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // rawBody : nécessaire pour vérifier la signature des webhooks Stripe
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
 
   const config = app.get<ReturnType<typeof configuration>>(APP_CONFIG);
   const isProduction = config.app.env === 'production';

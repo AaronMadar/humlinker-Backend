@@ -63,6 +63,17 @@ model User {
   /// Fin de la période payée — au-delà, l'utilisateur repasse automatiquement en free.
   planExpiresAt DateTime?
 
+  // ─── Stripe ───
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  /// Statut Stripe brut (active, trialing, past_due, canceled…)
+  subscriptionStatus   String?
+  /// L'utilisateur a demandé la résiliation : Pro jusqu'à currentPeriodEnd puis free
+  cancelAtPeriodEnd    Boolean   @default(false)
+  /// Début / fin de la période de facturation en cours (ancre les quotas mensuels Pro)
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   lastLoginAt DateTime?
@@ -201,4 +212,13 @@ model UsageRecord {
   @@index([userId, type, createdAt])
   @@index([type, createdAt])
   @@map("usage_records")
+}
+
+/// Événements Stripe déjà traités (journal + idempotence).
+model StripeEvent {
+  id          String   @id
+  type        String
+  processedAt DateTime @default(now())
+
+  @@map("stripe_events")
 }
