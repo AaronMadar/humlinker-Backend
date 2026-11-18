@@ -51,14 +51,17 @@ describe('snapshotFromSubscription', () => {
     expect(snap.planExpiresAt!.getTime()).toBe(start.getTime() + 3 * DAY);
   });
 
-  it.each(['canceled', 'unpaid', 'incomplete', 'incomplete_expired', 'paused'] as const)(
-    '%s → free',
-    (status) => {
-      const snap = snapshotFromSubscription(sub(status, start, end));
-      expect(snap.plan).toBe('free');
-      expect(snap.planExpiresAt).toBeNull();
-    },
-  );
+  it.each([
+    'canceled',
+    'unpaid',
+    'incomplete',
+    'incomplete_expired',
+    'paused',
+  ] as const)('%s → free', (status) => {
+    const snap = snapshotFromSubscription(sub(status, start, end));
+    expect(snap.plan).toBe('free');
+    expect(snap.planExpiresAt).toBeNull();
+  });
 });
 
 describe('QuotaService.periodBounds (mois ancré sur l’abonnement)', () => {
@@ -95,7 +98,10 @@ describe('QuotaService.periodBounds (mois ancré sur l’abonnement)', () => {
   });
 
   it('sans ancre (gratuit) : mois calendaire', () => {
-    const { start } = QuotaService.periodBounds('month', new Date('2026-11-20T00:00:00Z'));
+    const { start } = QuotaService.periodBounds(
+      'month',
+      new Date('2026-11-20T00:00:00Z'),
+    );
     expect(start.toISOString()).toBe('2026-11-01T00:00:00.000Z');
   });
 });
@@ -113,12 +119,22 @@ describe('StripeService — webhooks', () => {
     process.env.STRIPE_PRICE_PRO_MONTHLY = 'price_month';
 
     users = new Map([
-      ['u1', { id: 'u1', stripeCustomerId: null, stripeSubscriptionId: null, subscriptionStatus: null }],
+      [
+        'u1',
+        {
+          id: 'u1',
+          stripeCustomerId: null,
+          stripeSubscriptionId: null,
+          subscriptionStatus: null,
+        },
+      ],
     ]);
     const find = ({ where }: any) =>
       where.id
         ? (users.get(where.id) ?? null)
-        : ([...users.values()].find((u) => u.stripeCustomerId === where.stripeCustomerId) ?? null);
+        : ([...users.values()].find(
+            (u) => u.stripeCustomerId === where.stripeCustomerId,
+          ) ?? null);
     prisma = {
       user: {
         findUnique: jest.fn(async (args) => find(args)),
@@ -129,7 +145,8 @@ describe('StripeService — webhooks', () => {
         }),
         updateMany: jest.fn(async ({ where, data }) => {
           const u = users.get(where.id);
-          if (u && u.stripeCustomerId === where.stripeCustomerId) Object.assign(u, data);
+          if (u && u.stripeCustomerId === where.stripeCustomerId)
+            Object.assign(u, data);
           return { count: 1 };
         }),
       },
@@ -143,25 +160,32 @@ describe('StripeService — webhooks', () => {
   });
 
   const sign = (payload: string) =>
-    new Stripe('sk_test_dummy').webhooks.generateTestHeaderString({ payload, secret: SECRET });
+    new Stripe('sk_test_dummy').webhooks.generateTestHeaderString({
+      payload,
+      secret: SECRET,
+    });
 
   it('rejette une signature invalide (400)', () => {
     const payload = JSON.stringify({ id: 'evt_1', type: 'ping' });
-    expect(() => service.constructEvent(Buffer.from(payload), 't=1,v1=faux')).toThrow(
-      'Signature Stripe invalide.',
-    );
+    expect(() =>
+      service.constructEvent(Buffer.from(payload), 't=1,v1=faux'),
+    ).toThrow('Signature Stripe invalide.');
   });
 
   it('rejette un corps modifié après signature', () => {
     const payload = JSON.stringify({ id: 'evt_1', type: 'ping' });
     const header = sign(payload);
     const tampered = payload.replace('ping', 'pong');
-    expect(() => service.constructEvent(Buffer.from(tampered), header)).toThrow();
+    expect(() =>
+      service.constructEvent(Buffer.from(tampered), header),
+    ).toThrow();
   });
 
   it('checkout terminé → relie le client et passe l’utilisateur en Pro', async () => {
     const now = new Date();
-    retrieve.mockResolvedValue(sub('active', now, new Date(now.getTime() + 30 * DAY)));
+    retrieve.mockResolvedValue(
+      sub('active', now, new Date(now.getTime() + 30 * DAY)),
+    );
 
     const payload = JSON.stringify({
       id: 'evt_checkout',
@@ -195,7 +219,9 @@ describe('StripeService — webhooks', () => {
   it('abonnement supprimé → retour en free', async () => {
     users.get('u1').stripeCustomerId = 'cus_1';
     const now = new Date();
-    retrieve.mockResolvedValue(sub('canceled', now, new Date(now.getTime() + 30 * DAY)));
+    retrieve.mockResolvedValue(
+      sub('canceled', now, new Date(now.getTime() + 30 * DAY)),
+    );
 
     await service.handleEvent({
       id: 'evt_del',
@@ -203,7 +229,10 @@ describe('StripeService — webhooks', () => {
       data: { object: { id: 'sub_1' } },
     } as unknown as Stripe.Event);
 
-    expect(users.get('u1')).toMatchObject({ plan: 'free', planExpiresAt: null });
+    expect(users.get('u1')).toMatchObject({
+      plan: 'free',
+      planExpiresAt: null,
+    });
   });
 
   it('un ancien abonnement terminé n’écrase pas un abonnement actif plus récent', async () => {
@@ -215,7 +244,9 @@ describe('StripeService — webhooks', () => {
     });
     const now = new Date();
     retrieve.mockResolvedValue(
-      sub('canceled', now, now, { id: 'sub_old' } as Partial<Stripe.Subscription>),
+      sub('canceled', now, now, {
+        id: 'sub_old',
+      } as Partial<Stripe.Subscription>),
     );
 
     await service.handleEvent({
@@ -224,7 +255,10 @@ describe('StripeService — webhooks', () => {
       data: { object: { id: 'sub_old' } },
     } as unknown as Stripe.Event);
 
-    expect(users.get('u1')).toMatchObject({ plan: 'pro', stripeSubscriptionId: 'sub_new' });
+    expect(users.get('u1')).toMatchObject({
+      plan: 'pro',
+      stripeSubscriptionId: 'sub_new',
+    });
   });
 
   it('ignore les événements non liés à un abonnement', async () => {
