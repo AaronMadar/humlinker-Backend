@@ -6,6 +6,7 @@ import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface
 import type { Humlinker } from './entities';
 import { CreateHumlinkerDto } from './dto';
 import { HumlinkerService } from './humlinker.service';
+import { DAY, HOUR, RateLimit } from '../../common/rate-limit';
 
 @ApiTags('Humlinkers')
 @ApiBearerAuth()
@@ -16,6 +17,10 @@ export class HumlinkerController {
   ) {}
 
   @Post()
+  @RateLimit(
+    { name: 'hour', by: 'user', limit: 20, windowSec: HOUR },
+    { name: 'day', by: 'user', limit: 50, windowSec: DAY },
+  )
   @ApiOperation({
     summary: 'Créer un humlinker',
     description:

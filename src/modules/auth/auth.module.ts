@@ -23,6 +23,7 @@ import { PassportModule } from '@nestjs/passport';
 import { APP_CONFIG } from '@/config';
 import configuration from '@/config/configuration';
 import { JwtAuthGuard } from '@/guards';
+import { RateLimitGuard } from '@/common/rate-limit';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -51,6 +52,11 @@ import { JwtStrategy } from './strategies/jwt.strategy';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard, // Guard JWT global — toutes les routes sont protégées sauf @Public()
+    },
+    {
+      // Enregistré APRÈS JwtAuthGuard → req.user est connu pour les limites par utilisateur
+      provide: APP_GUARD,
+      useClass: RateLimitGuard,
     },
   ],
   exports: [AuthService, JwtModule, PassportModule],

@@ -28,9 +28,12 @@
  */
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
 } from '@nestjs/common';
+import { randomInt, timingSafeEqual } from 'crypto';
 import { MailService } from '@/integrations/mail/mail.service';
 import { SmsService } from '@/integrations/sms/sms.service';
 import { RedisService } from '@/redis/redis.service';
@@ -44,6 +47,16 @@ const VERIFIED_TTL_SECONDS = 15 * 60;
 
 // Longueur du code OTP
 const OTP_LENGTH = 6;
+
+/** Nombre d'essais de vérification autorisés par code envoyé. */
+const OTP_MAX_ATTEMPTS = 5;
+
+/** Délai minimum entre deux envois vers la même cible. */
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
+
+/** Plafond d'envois par cible (anti SMS pumping / spam email). */
+const OTP_MAX_SENDS_PER_HOUR = { phone: 3, email: 5 } as const;
+const OTP_MAX_SENDS_PER_DAY = { phone: 6, email: 15 } as const;
 
 @Injectable()
 export class OtpService {
@@ -62,9 +75,8 @@ export class OtpService {
    * Padding avec zéros pour toujours avoir 6 chiffres (ex: 000712).
    */
   private generateCode(): string {
-    const max = Math.pow(10, OTP_LENGTH);
-    const code = Math.floor(Math.random() * max);
-    return code.toString().padStart(OTP_LENGTH, '0');
+    // randomInt = générateur cryptographiquement sûr (contrairement à Math.random)
+    return randomInt(0, 10 ** OTP_LENGTH).toString().padStart(OTP_LENGTH, '0');
   }
 
   // ─── Clés Redis ────────────────────────────────────────────────────────────
@@ -77,6 +89,48 @@ export class OtpService {
     return `verified:${type}:${target}`;
   }
 
+  private attemptsKey(type: 'email' | 'phone', target: string): string {
+    return `otp:attempts:${type}:${target}`;
+  }
+
+  /**
+   * Vérifie et consomme le droit d'envoyer un OTP à une cible :
+   * cooldown entre deux envois + plafonds horaire et journalier.
+   */
+  private async assertCanSend(type: 'email' | 'phone', target: string): Promise<void> {
+    const cooldownKey = `otp:cooldown:${type}:${target}`;
+    const acquired = await this.redis.setIfAbsent(cooldownKey, '1', OTP_RESEND_COOLDOWN_SECONDS);
+    if (!acquired) {
+      const ttl = await this.redis.ttl(cooldownKey);
+      throw new HttpException(
+        `Veuillez patienter ${ttl || OTP_RESEND_COOLDOWN_SECONDS} s avant de demander un nouveau code.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const hour = await this.redis.incrWithTtl(`otp:sends:h:${type}:${target}`, 60 * 60);
+    const day = await this.redis.incrWithTtl(`otp:sends:d:${type}:${target}`, 24 * 60 * 60);
+    if (hour.count > OTP_MAX_SENDS_PER_HOUR[type] || day.count > OTP_MAX_SENDS_PER_DAY[type]) {
+      this.logger.warn(`Plafond d'envoi OTP atteint pour ${type}:${target}`);
+      throw new HttpException(
+        'Trop de codes demandés pour cette adresse ou ce numéro. Réessayez plus tard.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  private async storeCode(type: 'email' | 'phone', target: string, code: string): Promise<void> {
+    await this.redis.set(this.otpKey(type, target), code, OTP_TTL_SECONDS);
+    await this.redis.del(this.attemptsKey(type, target));
+  }
+
+  /** Comparaison en temps constant (évite les attaques par mesure de temps). */
+  private codesMatch(expected: string, received: string): boolean {
+    const a = Buffer.from(expected);
+    const b = Buffer.from(received);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+
   // ─── Envoi ─────────────────────────────────────────────────────────────────
 
   /**
@@ -84,8 +138,9 @@ export class OtpService {
    * Écrase un éventuel OTP précédent (nouvel envoi = nouveau code).
    */
   async sendEmailOtp(email: string): Promise<void> {
+    await this.assertCanSend('email', email);
     const code = this.generateCode();
-    await this.redis.set(this.otpKey('email', email), code, OTP_TTL_SECONDS);
+    await this.storeCode('email', email, code);
     await this.mailService.sendOtp(email, code);
     this.logger.log(`Email OTP sent to ${email}`);
   }
@@ -94,8 +149,9 @@ export class OtpService {
    * Génère un OTP, le stocke dans Redis et l'envoie par SMS via Twilio.
    */
   async sendPhoneOtp(phoneNumber: string): Promise<void> {
+    await this.assertCanSend('phone', phoneNumber);
     const code = this.generateCode();
-    await this.redis.set(this.otpKey('phone', phoneNumber), code, OTP_TTL_SECONDS);
+    await this.storeCode('phone', phoneNumber, code);
     await this.smsService.sendOtp(phoneNumber, code);
     this.logger.log(`Phone OTP sent to ${phoneNumber}`);
   }
@@ -121,12 +177,25 @@ export class OtpService {
       );
     }
 
-    if (storedCode !== code.trim()) {
-      throw new BadRequestException('Code incorrect.');
+    if (!this.codesMatch(storedCode, code.trim())) {
+      const { count } = await this.redis.incrWithTtl(this.attemptsKey(type, target), OTP_TTL_SECONDS);
+      if (count >= OTP_MAX_ATTEMPTS) {
+        // Trop d'essais → le code est invalidé, il faut en redemander un
+        await this.redis.del(this.otpKey(type, target));
+        await this.redis.del(this.attemptsKey(type, target));
+        this.logger.warn(`OTP invalidé après ${count} essais pour ${type}:${target}`);
+        throw new BadRequestException(
+          'Trop de tentatives. Ce code est désormais invalide, veuillez en demander un nouveau.',
+        );
+      }
+      throw new BadRequestException(
+        `Code incorrect. Il vous reste ${OTP_MAX_ATTEMPTS - count} tentative(s).`,
+      );
     }
 
     // Code correct : on supprime le code OTP et on pose le flag "verified"
     await this.redis.del(this.otpKey(type, target));
+    await this.redis.del(this.attemptsKey(type, target));
     await this.redis.set(
       this.verifiedKey(type, target),
       '1',

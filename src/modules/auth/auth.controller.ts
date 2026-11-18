@@ -16,6 +16,7 @@ import {
 } from '@nestjs/swagger';
 import type { ApiResponse as AppApiResponse } from '@/common';
 import { Public } from '@/decorators';
+import { DAY, HOUR, MINUTE, RateLimit } from '@/common/rate-limit';
 import { CurrentUser } from '@/decorators/current-user.decorator';
 import type { AuthenticatedUser } from './interfaces/jwt-payload.interface';
 import type { SafeUser } from '@/utils';
@@ -43,6 +44,10 @@ export class AuthController {
 
   @Public()
   @Post('send-otp/email')
+  @RateLimit(
+    { name: 'hour', by: 'ip', limit: 10, windowSec: HOUR },
+    { name: 'day', by: 'ip', limit: 30, windowSec: DAY },
+  )
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Envoyer un OTP par email',
@@ -60,6 +65,11 @@ export class AuthController {
 
   @Public()
   @Post('send-otp/phone')
+  // SMS = coût réel → limites strictes par IP (en plus des limites par numéro dans OtpService)
+  @RateLimit(
+    { name: 'hour', by: 'ip', limit: 5, windowSec: HOUR },
+    { name: 'day', by: 'ip', limit: 10, windowSec: DAY },
+  )
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Envoyer un OTP par SMS',
@@ -86,6 +96,7 @@ export class AuthController {
 
   @Public()
   @Post('verify-otp')
+  @RateLimit({ name: '15min', by: 'ip', limit: 20, windowSec: 15 * MINUTE })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Vérifier un code OTP',
@@ -109,6 +120,7 @@ export class AuthController {
 
   @Public()
   @Post('register')
+  @RateLimit({ name: 'hour', by: 'ip', limit: 10, windowSec: HOUR })
   @ApiOperation({
     summary: "Inscription classique",
     description:
@@ -127,6 +139,7 @@ export class AuthController {
 
   @Public()
   @Post('login')
+  @RateLimit({ name: '15min', by: 'ip', limit: 20, windowSec: 15 * MINUTE })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Connexion',
@@ -135,7 +148,7 @@ export class AuthController {
   @ApiBody({ type: LoginDto })
   @ApiResponse({ status: 200, description: 'Connexion réussie — JWT retourné.' })
   @ApiResponse({ status: 401, description: 'Identifiant ou mot de passe incorrect.' })
-  @ApiResponse({ status: 404, description: 'Aucun compte trouvé avec cet identifiant.' })
+  @ApiResponse({ status: 429, description: 'Trop de tentatives — compte ou IP temporairement bloqué.' })
   async login(@Body() dto: LoginDto): Promise<AppApiResponse<AuthResponseData>> {
     const result = await this.authService.login(dto);
     return { success: true, data: result, timestamp: new Date().toISOString() };
@@ -145,6 +158,7 @@ export class AuthController {
 
   @Public()
   @Post('google')
+  @RateLimit({ name: '15min', by: 'ip', limit: 30, windowSec: 15 * MINUTE })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Connexion via Google OAuth',
@@ -163,6 +177,7 @@ export class AuthController {
 
   @Public()
   @Post('reset-password')
+  @RateLimit({ name: 'hour', by: 'ip', limit: 10, windowSec: HOUR })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Réinitialiser le mot de passe oublié',
@@ -181,6 +196,7 @@ export class AuthController {
   // ─── Complete Google profile ──────────────────────────────────────────────
 
   @Post('complete-profile')
+  @RateLimit({ name: 'hour', by: 'user', limit: 10, windowSec: HOUR })
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Compléter le profil après connexion Google',

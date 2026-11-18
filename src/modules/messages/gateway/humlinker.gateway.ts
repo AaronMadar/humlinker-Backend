@@ -29,7 +29,7 @@ import { JwtService } from '@nestjs/jwt';
 import type { Server, Socket } from 'socket.io';
 
 @WebSocketGateway({
-  cors: { origin: '*' }, // À restreindre en production
+  // CORS géré par CorsIoAdapter (origines de FRONTEND_URL) — voir main.ts
   namespace: '/humlinker',
 })
 export class HumlinkerGateway

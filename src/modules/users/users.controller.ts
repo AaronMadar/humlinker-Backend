@@ -3,7 +3,8 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@ne
 import type { ApiResponse as AppApiResponse } from '@/common';
 import { CurrentUser } from '@/decorators';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
-import type { SafeUser } from '@/utils';
+import type { PublicUser, SafeUser } from '@/utils';
+import { MINUTE, RateLimit } from '@/common/rate-limit';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
 import { UpdateEmailDto } from './dto/update-email.dto';
@@ -76,13 +77,14 @@ export class UsersController {
   }
 
   @Get('search')
+  @RateLimit({ name: 'minute', by: 'user', limit: 30, windowSec: MINUTE })
   @ApiOperation({ summary: 'Rechercher par PIN', description: 'Recherche un utilisateur inscrit par son PIN exact (8 caractères, insensible à la casse).' })
   @ApiQuery({ name: 'q', description: 'PIN du destinataire (ex: A1B2C3D4)', example: 'A1B2C3D4' })
   @ApiResponse({ status: 200, description: 'Utilisateur trouvé ou liste vide.' })
   async searchUsers(
     @CurrentUser() user: AuthenticatedUser,
     @Query() dto: SearchUsersQueryDto,
-  ): Promise<AppApiResponse<SafeUser[]>> {
+  ): Promise<AppApiResponse<PublicUser[]>> {
     const data = await this.usersService.searchUsers(user.userId, dto);
     return { success: true, data, timestamp: new Date().toISOString() };
   }

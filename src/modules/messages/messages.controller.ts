@@ -5,6 +5,7 @@ import { CurrentUser } from '../../decorators';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 import { MessagesService, type ChatResponse, type SafeDraft } from './messages.service';
 import { SendMessageDto, RestoreDraftVersionDto } from './dto';
+import { HOUR, MINUTE, RateLimit } from '../../common/rate-limit';
 
 @ApiTags('Messages')
 @ApiBearerAuth()
@@ -34,6 +35,11 @@ export class MessagesController {
   }
 
   @Post('messages')
+  // Appel IA payant → anti-script par utilisateur (les quotas par plan viendront à l'étape 2)
+  @RateLimit(
+    { name: 'minute', by: 'user', limit: 10, windowSec: MINUTE },
+    { name: 'hour', by: 'user', limit: 120, windowSec: HOUR },
+  )
   @ApiOperation({ summary: "Envoyer un message a l'IA", description: "L'IA met a jour le draft actif." })
   @ApiParam({ name: 'humhlinkerId', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
   @ApiResponse({ status: 201, description: 'activeDraft mis a jour.' })
@@ -64,6 +70,10 @@ export class MessagesController {
   }
 
   @Post('send')
+  @RateLimit(
+    { name: 'minute', by: 'user', limit: 10, windowSec: MINUTE },
+    { name: 'hour', by: 'user', limit: 100, windowSec: HOUR },
+  )
   @ApiOperation({ summary: 'Envoyer le draft au destinataire', description: 'Envoie le realMessage au target et supprime les versions en cache.' })
   @ApiParam({ name: 'humhlinkerId', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
   @ApiResponse({ status: 201, description: 'Message envoye - draft vide retourne.' })
