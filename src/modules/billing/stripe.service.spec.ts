@@ -1,5 +1,4 @@
 import Stripe from 'stripe';
-import type { PrismaService } from '@/database';
 import { QuotaService } from './quota.service';
 import { StripeService, snapshotFromSubscription } from './stripe.service';
 
@@ -153,7 +152,7 @@ describe('StripeService — webhooks', () => {
       stripeEvent: { upsert: jest.fn(async () => ({})) },
     };
 
-    service = new StripeService(prisma as unknown as PrismaService);
+    service = new StripeService(prisma);
     retrieve = jest.fn();
     // On garde le vrai module webhooks (signature) et on simule l'API subscriptions
     (service as any).stripe.subscriptions = { retrieve };
@@ -243,11 +242,7 @@ describe('StripeService — webhooks', () => {
       plan: 'pro',
     });
     const now = new Date();
-    retrieve.mockResolvedValue(
-      sub('canceled', now, now, {
-        id: 'sub_old',
-      } as Partial<Stripe.Subscription>),
-    );
+    retrieve.mockResolvedValue(sub('canceled', now, now, { id: 'sub_old' }));
 
     await service.handleEvent({
       id: 'evt_old',
