@@ -44,6 +44,23 @@ export default () => ({
 
   ai: {
     geminiApiKey: process.env.GEMINI_API_KEY ?? '',
+    model: process.env.AI_MODEL ?? 'gemini-2.5-flash',
+    /** Délai max d'un appel Gemini (ms) */
+    timeoutMs: parseInt(process.env.AI_TIMEOUT_MS ?? '20000', 10),
+    /** Plafond de tokens de sortie, raisonnement compris (borne le coût d'un appel) */
+    maxOutputTokens: parseInt(process.env.AI_MAX_OUTPUT_TOKENS ?? '4096', 10),
+    /**
+     * Budget de « raisonnement » interne (facturé comme de la sortie).
+     * 0 (défaut) = désactivé ; « auto » = le modèle décide ; nombre = plafond.
+     * Mesure du 18/11/2026 sur 10 cas : qualité équivalente, 3,4× moins cher
+     * et 3,4× plus rapide sans raisonnement.
+     */
+    thinkingBudget: ((): number | null => {
+      const v = (process.env.AI_THINKING_BUDGET ?? '0').trim().toLowerCase();
+      if (v === 'auto' || v === '') return null;
+      const n = parseInt(v, 10);
+      return Number.isNaN(n) ? 0 : n;
+    })(),
   },
 
   firebase: {

@@ -4,6 +4,7 @@ import type { ApiResponse as AppApiResponse } from '../../common';
 import { CurrentUser } from '../../decorators';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 import { MessagesService, type ChatResponse, type SafeDraft } from './messages.service';
+import type { AiNotice } from '../ai/ai.service';
 import { SendMessageDto, RestoreDraftVersionDto } from './dto';
 import { HOUR, MINUTE, RateLimit } from '../../common/rate-limit';
 
@@ -49,7 +50,7 @@ export class MessagesController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('humhlinkerId', ParseUUIDPipe) humhlinkerId: string,
     @Body() dto: SendMessageDto,
-  ): Promise<AppApiResponse<{ activeDraft: SafeDraft }>> {
+  ): Promise<AppApiResponse<{ activeDraft: SafeDraft; notice: AiNotice | null }>> {
     const data = await this.messagesService.sendMessage(humhlinkerId, user.userId, dto.content);
     return { success: true, data, timestamp: new Date().toISOString() };
   }
