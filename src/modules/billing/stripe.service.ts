@@ -252,9 +252,12 @@ export class StripeService {
     if (!user?.stripeCustomerId) {
       throw new BadRequestException("Aucun abonnement à gérer pour l'instant.");
     }
+    // Configuration créée par `npm run stripe:setup` (sinon : celle par défaut du dashboard)
+    const configuration = process.env.STRIPE_PORTAL_CONFIGURATION_ID?.trim();
     const session = await stripe.billingPortal.sessions.create({
       customer: user.stripeCustomerId,
       return_url: `${this.frontendUrl()}/app/profile`,
+      ...(configuration ? { configuration } : {}),
     });
     return session.url;
   }
