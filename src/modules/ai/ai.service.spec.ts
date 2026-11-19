@@ -7,6 +7,7 @@ import {
   buildAiPayload,
   hasAccusatoryGeneralization,
   isWrongScript,
+  isSameIntention,
   isRetriable,
   parseAiResponse,
   type AiContext,
@@ -257,6 +258,57 @@ describe('AiService.processUserMessage', () => {
     );
   });
 
+  it('après un envoi, un message sans rien de nouveau → notice nothing_new', async () => {
+    generate.mockResolvedValue(
+      reply(
+        good({ objectiveMessage: '', realMessage: '', draftChanged: false }),
+      ),
+    );
+    const r = await service.processUserMessage(
+      ctx({ newMessage: 'pauvre type dis lui' }),
+    );
+    expect(r.notice).toBe('nothing_new');
+    expect(r.draftChanged).toBe(false);
+  });
+
+  it('une intention déjà envoyée reproposée → correction, puis nothing_new si l’IA insiste', async () => {
+    const sent =
+      "Vous souhaitez informer Armand que vous êtes contrariée qu'il ne soit pas venu se présenter jeudi comme cela était précisé.";
+    generate.mockResolvedValue(reply(good({ objectiveMessage: sent })));
+    const r = await service.processUserMessage(
+      ctx({
+        chatHistory: [{ type: 'draft_snapshot', content: sent }] as never,
+      }),
+    );
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[1][0].contents[2].parts[0].text).toMatch(
+      /DÉJÀ transmise/,
+    );
+    expect(r.notice).toBe('nothing_new');
+  });
+
+  it('une intention déjà envoyée, corrigée au 2e essai → nouveau brouillon accepté', async () => {
+    const sent =
+      "Vous souhaitez informer Armand que vous êtes contrariée qu'il ne soit pas venu se présenter jeudi comme cela était précisé.";
+    generate
+      .mockResolvedValueOnce(reply(good({ objectiveMessage: sent })))
+      .mockResolvedValueOnce(
+        reply(
+          good({
+            objectiveMessage:
+              'Vous souhaitez demander à Armand de vous rappeler avant vendredi.',
+          }),
+        ),
+      );
+    const r = await service.processUserMessage(
+      ctx({
+        chatHistory: [{ type: 'draft_snapshot', content: sent }] as never,
+      }),
+    );
+    expect(r.notice).toBeNull();
+    expect(r.objectiveMessage).toContain('vendredi');
+  });
+
   it('active le raisonnement seulement pour l’hébreu et l’arabe', async () => {
     generate.mockResolvedValue(reply(good()));
     await service.processUserMessage(ctx());
@@ -345,9 +397,34 @@ describe('isWrongScript (langues à alphabet non latin)', () => {
     expect(isWrongScript('ברצונך להודיע לפייר', 'he')).toBe(false);
     expect(isWrongScript('Hello', 'ar')).toBe(true);
     expect(isWrongScript('تودّ إبلاغ', 'ar')).toBe(false);
+    // Mélange de langues dans la même phrase
+    expect(isWrongScript('ברצונך להודיע לפגישה de mardi', 'he')).toBe(true);
+    // Un nom propre en lettres latines reste accepté
+    expect(
+      isWrongScript('ברצונך להודיע ל-Pierre Martin שהפגישה בוטלה', 'he'),
+    ).toBe(false);
   });
   it('ne juge pas les langues à alphabet latin ni les textes vides', () => {
     expect(isWrongScript('Hola', 'fr')).toBe(false);
     expect(isWrongScript('', 'he')).toBe(false);
+  });
+});
+
+describe('isSameIntention', () => {
+  it('reconnaît la même intention malgré ponctuation et casse', () => {
+    expect(
+      isSameIntention(
+        "Vous souhaitez informer Armand que vous êtes contrariée qu'il ne soit pas venu se présenter jeudi comme cela était précisé.",
+        "vous souhaitez informer armand que vous êtes contrariée qu'il ne soit pas venu se présenter jeudi, comme cela était précisé",
+      ),
+    ).toBe(true);
+  });
+  it('distingue une intention nouvelle', () => {
+    expect(
+      isSameIntention(
+        "Vous souhaitez informer Armand que vous êtes contrariée qu'il ne soit pas venu se présenter jeudi comme cela était précisé.",
+        'Vous souhaitez demander à Armand de vous rappeler avant vendredi.',
+      ),
+    ).toBe(false);
   });
 });

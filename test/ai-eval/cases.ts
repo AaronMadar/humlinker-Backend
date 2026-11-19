@@ -22,7 +22,8 @@ export type Outcome =
   | 'draft'
   | 'unchanged'
   | 'out_of_scope'
-  | 'content_refused';
+  | 'content_refused'
+  | 'nothing_new';
 
 export interface EvalCase {
   id: string;
@@ -278,6 +279,64 @@ export const CASES: EvalCase[] = [
     category: 'Mise à jour',
     ctx: { currentDraft: current(RDV, RDV_REAL), newMessage: 'oui envoie' },
     outcome: 'unchanged',
+  },
+
+  // Bug constaté le 19/11/2026 : après un envoi, une insulte seule faisait
+  // reproposer l'intention déjà envoyée.
+  {
+    id: 'D5-rien-de-nouveau-apres-envoi',
+    category: 'Mise à jour',
+    ctx: {
+      targetName: 'Armand Renohabitat',
+      relationshipType: 'candidat',
+      chatHistory: [
+        {
+          type: 'text',
+          content:
+            "il est clairement stupide, pourquoi il n'est pas venu jeudi se présenter comme tout le monde",
+        },
+        {
+          type: 'draft_snapshot',
+          content:
+            "Vous souhaitez informer Armand que vous êtes contrariée qu'il ne soit pas venu se présenter jeudi comme cela était précisé.",
+        },
+        {
+          type: 'target_reply',
+          content:
+            "Armand vous informe que vous lui aviez dit que vous l'appelleriez.",
+        },
+      ] as never,
+      currentDraft: current('Rien à transmettre pour le moment.', ''),
+      newMessage: 'pauvre type dis lui',
+    },
+    outcome: 'nothing_new',
+  },
+  {
+    id: 'D6-nouveau-apres-envoi',
+    category: 'Mise à jour',
+    ctx: {
+      targetName: 'Armand Renohabitat',
+      relationshipType: 'candidat',
+      chatHistory: [
+        {
+          type: 'draft_snapshot',
+          content:
+            "Vous souhaitez informer Armand que vous êtes contrariée qu'il ne soit pas venu se présenter jeudi comme cela était précisé.",
+        },
+        {
+          type: 'target_reply',
+          content:
+            "Armand vous informe que vous lui aviez dit que vous l'appelleriez.",
+        },
+      ] as never,
+      currentDraft: current('Rien à transmettre pour le moment.', ''),
+      newMessage:
+        "dis lui qu'il me rappelle avant vendredi pour fixer un nouveau rendez-vous",
+    },
+    outcome: 'draft',
+    include: ['vendredi', 'rendez-vous'],
+    // L'intention déjà envoyée (absence de jeudi) ne doit pas être répétée
+    exclude: ['contrari', 'précisé'],
   },
 
   // ─── E. Hors sujet ────────────────────────────────────────────────────────
