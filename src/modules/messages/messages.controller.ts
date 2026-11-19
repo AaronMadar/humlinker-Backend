@@ -1,9 +1,30 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiParam,
+  ApiQuery,
+} from '@nestjs/swagger';
 import type { ApiResponse as AppApiResponse } from '../../common';
 import { CurrentUser } from '../../decorators';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
-import { MessagesService, type ChatResponse, type SafeDraft } from './messages.service';
+import {
+  MessagesService,
+  type ChatResponse,
+  type SafeDraft,
+} from './messages.service';
 import type { AiNotice } from '../ai/ai.service';
 import { SendMessageDto, RestoreDraftVersionDto } from './dto';
 import { HOUR, MINUTE, RateLimit } from '../../common/rate-limit';
@@ -15,12 +36,25 @@ export class MessagesController {
   constructor(private readonly messagesService: MessagesService) {}
 
   @Get('messages')
-  @ApiOperation({ summary: 'Charger le chat', description: 'Retourne les 30 derniers messages + activeDraft + draftVersions.' })
-  @ApiParam({ name: 'humhlinkerId', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiOperation({
+    summary: 'Charger le chat',
+    description:
+      'Retourne les 30 derniers messages + activeDraft + draftVersions.',
+  })
+  @ApiParam({
+    name: 'humhlinkerId',
+    example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  })
   @ApiQuery({ name: 'limit', required: false, example: 30 })
   @ApiQuery({ name: 'offset', required: false, example: 0 })
-  @ApiResponse({ status: 200, description: 'messages[] + activeDraft + draftVersions.' })
-  @ApiResponse({ status: 403, description: "L'utilisateur n'est pas participant de ce humlinker." })
+  @ApiResponse({
+    status: 200,
+    description: 'messages[] + activeDraft + draftVersions.',
+  })
+  @ApiResponse({
+    status: 403,
+    description: "L'utilisateur n'est pas participant de ce humlinker.",
+  })
   @ApiResponse({ status: 404, description: 'Humlinker introuvable.' })
   async getChat(
     @CurrentUser() user: AuthenticatedUser,
@@ -41,32 +75,88 @@ export class MessagesController {
     { name: 'minute', by: 'user', limit: 10, windowSec: MINUTE },
     { name: 'hour', by: 'user', limit: 120, windowSec: HOUR },
   )
-  @ApiOperation({ summary: "Envoyer un message a l'IA", description: "L'IA met a jour le draft actif." })
-  @ApiParam({ name: 'humhlinkerId', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiOperation({
+    summary: "Envoyer un message a l'IA",
+    description: "L'IA met a jour le draft actif.",
+  })
+  @ApiParam({
+    name: 'humhlinkerId',
+    example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  })
   @ApiResponse({ status: 201, description: 'activeDraft mis a jour.' })
-  @ApiResponse({ status: 403, description: "L'utilisateur n'est pas le sender de ce humlinker." })
+  @ApiResponse({
+    status: 403,
+    description: "L'utilisateur n'est pas le sender de ce humlinker.",
+  })
   @ApiResponse({ status: 404, description: 'Humlinker introuvable.' })
   async sendMessage(
     @CurrentUser() user: AuthenticatedUser,
     @Param('humhlinkerId', ParseUUIDPipe) humhlinkerId: string,
     @Body() dto: SendMessageDto,
-  ): Promise<AppApiResponse<{ activeDraft: SafeDraft; notice: AiNotice | null }>> {
-    const data = await this.messagesService.sendMessage(humhlinkerId, user.userId, dto.content);
+  ): Promise<
+    AppApiResponse<{ activeDraft: SafeDraft; notice: AiNotice | null }>
+  > {
+    const data = await this.messagesService.sendMessage(
+      humhlinkerId,
+      user.userId,
+      dto.content,
+    );
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
+  @Delete('messages')
+  @ApiOperation({
+    summary: 'Effacer la discussion (de mon côté)',
+    description:
+      "Masque l'historique à l'écran pour l'utilisateur. Rien ne change pour l'autre participant, la reformulation en cours est conservée, et l'IA garde les anciens messages comme contexte.",
+  })
+  @ApiParam({
+    name: 'humhlinkerId',
+    example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  })
+  @ApiResponse({ status: 200, description: 'Historique masqué.' })
+  async clearHistory(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('humhlinkerId', ParseUUIDPipe) humhlinkerId: string,
+  ): Promise<AppApiResponse<{ historyClearedAt: Date }>> {
+    const data = await this.messagesService.clearHistory(
+      humhlinkerId,
+      user.userId,
+    );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
   @Patch('draft')
-  @ApiOperation({ summary: 'Restaurer une version precedente du draft', description: "Restaure objectiveMessage + realMessage depuis le cache Redis. Aucun appel IA." })
-  @ApiParam({ name: 'humhlinkerId', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
+  @ApiOperation({
+    summary: 'Restaurer une version precedente du draft',
+    description:
+      'Restaure objectiveMessage + realMessage depuis le cache Redis. Aucun appel IA.',
+  })
+  @ApiParam({
+    name: 'humhlinkerId',
+    example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  })
   @ApiResponse({ status: 200, description: 'Draft restaure.' })
-  @ApiResponse({ status: 403, description: "L'utilisateur n'est pas le sender de ce humlinker." })
-  @ApiResponse({ status: 404, description: 'Humlinker ou version introuvable.' })
+  @ApiResponse({
+    status: 403,
+    description: "L'utilisateur n'est pas le sender de ce humlinker.",
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Humlinker ou version introuvable.',
+  })
   async restoreDraftVersion(
     @CurrentUser() user: AuthenticatedUser,
     @Param('humhlinkerId', ParseUUIDPipe) humhlinkerId: string,
     @Body() dto: RestoreDraftVersionDto,
-  ): Promise<AppApiResponse<{ activeDraft: SafeDraft; draftVersions: string[] }>> {
-    const data = await this.messagesService.restoreDraftVersion(humhlinkerId, user.userId, dto.versionIndex);
+  ): Promise<
+    AppApiResponse<{ activeDraft: SafeDraft; draftVersions: string[] }>
+  > {
+    const data = await this.messagesService.restoreDraftVersion(
+      humhlinkerId,
+      user.userId,
+      dto.versionIndex,
+    );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 
@@ -75,16 +165,32 @@ export class MessagesController {
     { name: 'minute', by: 'user', limit: 10, windowSec: MINUTE },
     { name: 'hour', by: 'user', limit: 100, windowSec: HOUR },
   )
-  @ApiOperation({ summary: 'Envoyer le draft au destinataire', description: 'Envoie le realMessage au target et supprime les versions en cache.' })
-  @ApiParam({ name: 'humhlinkerId', example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' })
-  @ApiResponse({ status: 201, description: 'Message envoye - draft vide retourne.' })
+  @ApiOperation({
+    summary: 'Envoyer le draft au destinataire',
+    description:
+      'Envoie le realMessage au target et supprime les versions en cache.',
+  })
+  @ApiParam({
+    name: 'humhlinkerId',
+    example: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Message envoye - draft vide retourne.',
+  })
   @ApiResponse({ status: 400, description: 'Aucun draft actif a envoyer.' })
-  @ApiResponse({ status: 403, description: "L'utilisateur n'est pas le sender de ce humlinker." })
+  @ApiResponse({
+    status: 403,
+    description: "L'utilisateur n'est pas le sender de ce humlinker.",
+  })
   async sendDraft(
     @CurrentUser() user: AuthenticatedUser,
     @Param('humhlinkerId', ParseUUIDPipe) humhlinkerId: string,
   ): Promise<AppApiResponse<SafeDraft>> {
-    const data = await this.messagesService.sendDraft(humhlinkerId, user.userId);
+    const data = await this.messagesService.sendDraft(
+      humhlinkerId,
+      user.userId,
+    );
     return { success: true, data, timestamp: new Date().toISOString() };
   }
 }

@@ -77,6 +77,8 @@ export interface Humlinker {
   target: HumlinkerParticipant;
 
   lastActivityAt: Date;
+  /** Messages antérieurs masqués à l'écran (toujours fournis à l'IA) */
+  historyClearedAt: Date | null;
   /** Contenu du dernier real_message (preview sidebar) */
   lastMessage?: string;
   createdAt: Date;

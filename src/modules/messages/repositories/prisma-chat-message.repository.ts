@@ -20,12 +20,12 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
 
   async findByHumlinker(
     humhlinkerId: string,
-    options: { limit?: number; offset?: number } = {},
+    options: { limit?: number; offset?: number; after?: Date | null } = {},
   ): Promise<ChatMessage[]> {
-    const { limit = DEFAULT_LIMIT, offset = 0 } = options;
+    const { limit = DEFAULT_LIMIT, offset = 0, after } = options;
 
     const rows = await this.prisma.chatMessage.findMany({
-      where: { humhlinkerId },
+      where: { humhlinkerId, ...(after ? { createdAt: { gt: after } } : {}) },
       orderBy: { createdAt: 'desc' },
       take: limit,
       skip: offset,
@@ -44,7 +44,7 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
         draftId: data.draftId ?? null,
       },
     });
-    return this.toChatMessage(row as never);
+    return this.toChatMessage(row);
   }
 
   private toChatMessage(row: {

@@ -52,14 +52,6 @@ import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 import { RedisService } from '../../redis/redis.service';
 import { QuotaService } from '../billing/quota.service';
 
-/** Durée de vie du cache target-ctx : 7 jours */
-const TARGET_CTX_TTL = 60 * 60 * 24 * 7;
-
-interface TargetCtxCache {
-  name: string;
-  language: string;
-}
-
 const EMPTY_DRAFT_OBJECTIVE = 'Rien à transmettre pour le moment.';
 const CHAT_HISTORY_LIMIT = 30;
 const MAX_PAGE_SIZE = 100;
@@ -115,32 +107,6 @@ export class MessagesService {
     private readonly config: ReturnType<typeof configuration>,
   ) {}
 
-  // ─── Cache Redis ──────────────────────────────────────────────────────────
-
-  /**
-   * Retourne le targetName + targetLanguage depuis le cache Redis.
-   * Si absent, lit depuis le snapshot du humlinker et peuple le cache.
-   */
-  private async getTargetCtx(
-    humhlinkerId: string,
-    humlinker: Humlinker,
-  ): Promise<TargetCtxCache> {
-    const key = `humlinker:target-ctx:${humhlinkerId}`;
-    const cached = await this.redisService.get(key);
-    if (cached) {
-      return JSON.parse(cached) as TargetCtxCache;
-    }
-    const ctx: TargetCtxCache = {
-      name:
-        [humlinker.target.firstName, humlinker.target.lastName]
-          .filter(Boolean)
-          .join(' ') || 'le destinataire',
-      language: humlinker.target.language,
-    };
-    await this.redisService.set(key, JSON.stringify(ctx), TARGET_CTX_TTL);
-    return ctx;
-  }
-
   // ─── Lecture ──────────────────────────────────────────────────────────────
 
   /**
@@ -153,7 +119,7 @@ export class MessagesService {
     options: { limit?: number; offset?: number } = {},
   ): Promise<ChatResponse> {
     // Contrôle d'accès : lève 403/404 si l'utilisateur n'est pas participant
-    await this.getHumlinkerOrThrow(humhlinkerId, userId);
+    const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
 
     // Pagination bornée (un limit énorme chargerait tout l'historique en mémoire)
     const limit = Math.min(
@@ -163,9 +129,10 @@ export class MessagesService {
     const offset = Math.max(0, options.offset || 0);
 
     // On charge limit+1 pour savoir s'il y a une page suivante
+    // Fil effacé : seuls les messages postérieurs s'affichent (l'IA voit tout)
     const messages = await this.chatMessageRepository.findByHumlinker(
       humhlinkerId,
-      { limit: limit + 1, offset },
+      { limit: limit + 1, offset, after: humlinker.historyClearedAt },
     );
 
     const hasMore = messages.length > limit;
@@ -224,19 +191,28 @@ export class MessagesService {
     const currentDraft =
       await this.draftRepository.findActiveDraft(humhlinkerId);
 
-    const senderName =
-      [humlinker.sender.firstName, humlinker.sender.lastName]
-        .filter(Boolean)
-        .join(' ') || "L'expéditeur";
-
-    const targetCtx = await this.getTargetCtx(humhlinkerId, humlinker);
+    // Profils ACTUELS des deux participants (langue, genre, nom) : un changement
+    // de langue dans le profil s'applique dès le message suivant. La photo figée
+    // du humlinker ne sert que de secours (ex. destinataire sans compte).
+    const [senderUser, targetUser] = await Promise.all([
+      this.usersRepository.findById(userId),
+      this.usersRepository.findById(humlinker.targetId),
+    ]);
+    const sender = senderUser ?? humlinker.sender;
+    const target =
+      targetUser && !targetUser.isPlaceholder ? targetUser : humlinker.target;
+    const fullName = (p: {
+      firstName: string | null;
+      lastName: string | null;
+    }) => [p.firstName, p.lastName].filter(Boolean).join(' ');
 
     const aiContext: AiContext = {
-      senderName,
-      senderGender: humlinker.sender.gender,
-      targetName: targetCtx.name,
-      senderLanguage: humlinker.sender.language,
-      targetLanguage: targetCtx.language,
+      senderName: fullName(sender) || "L'expéditeur",
+      senderGender: sender.gender,
+      targetName: fullName(target) || 'le destinataire',
+      senderLanguage: sender.language,
+      // Destinataire sans compte : langue choisie à la création du humlinker
+      targetLanguage: target.language,
       relationshipType: humlinker.relationshipType,
       lastSentDrafts,
       chatHistory,
@@ -305,6 +281,30 @@ export class MessagesService {
       activeDraft: this.toSafeDraft(updatedDraft),
       notice: aiResult.notice,
     };
+  }
+
+  // ─── Effacer la discussion (de son côté uniquement) ───────────────────────
+
+  /**
+   * Masque l'historique à l'écran pour CE côté du humlinker :
+   *  - rien ne change pour l'autre participant (son humlinker miroir est distinct) ;
+   *  - la reformulation en cours (draft non envoyé) est conservée ;
+   *  - l'IA continue de recevoir les anciens messages comme contexte.
+   */
+  async clearHistory(
+    humhlinkerId: string,
+    userId: string,
+  ): Promise<{ historyClearedAt: Date }> {
+    const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
+    // Chaque participant ne peut effacer que SON côté (le humlinker dont il est l'émetteur)
+    if (humlinker.senderId !== userId) {
+      throw new ForbiddenException(
+        'Vous ne pouvez effacer que votre propre fil de discussion.',
+      );
+    }
+    const historyClearedAt = new Date();
+    await this.humlinkerRepository.update(humhlinkerId, { historyClearedAt });
+    return { historyClearedAt };
   }
 
   // ─── Restauration d'une version précédente du draft ──────────────────────
