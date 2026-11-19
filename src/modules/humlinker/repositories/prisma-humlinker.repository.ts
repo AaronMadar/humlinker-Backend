@@ -112,6 +112,12 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
           ...(data.historyClearedAt !== undefined && {
             historyClearedAt: data.historyClearedAt,
           }),
+          ...(data.contextSummary !== undefined && {
+            contextSummary: data.contextSummary,
+          }),
+          ...(data.contextSummaryUntil !== undefined && {
+            contextSummaryUntil: data.contextSummaryUntil,
+          }),
         },
       });
       return this.toHumlinker(row);
@@ -155,6 +161,8 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
     createdAt: Date;
     updatedAt: Date;
     historyClearedAt: Date | null;
+    contextSummary: string | null;
+    contextSummaryUntil: Date | null;
     chatMessages?: { content: string; createdAt: Date }[];
   }): Humlinker {
     const last = row.chatMessages?.[0];
@@ -176,13 +184,25 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       targetContactName: row.targetContactName,
       relationshipType: row.relationshipType,
       title: row.title,
-      sender: row.senderSnapshot as HumlinkerParticipant,
-      target: row.targetSnapshot as HumlinkerParticipant,
+      sender: withoutPrivateEmail(row.senderSnapshot as HumlinkerParticipant),
+      target: withoutPrivateEmail(row.targetSnapshot as HumlinkerParticipant),
       lastActivityAt: row.lastActivityAt,
       historyClearedAt: row.historyClearedAt,
+      contextSummary: row.contextSummary,
+      contextSummaryUntil: row.contextSummaryUntil,
       lastMessage: lastVisible,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
   }
+}
+
+/**
+ * L'email d'un utilisateur inscrit est une donnée privée : il n'est jamais
+ * renvoyé à l'autre participant (ni stocké dans les nouveaux snapshots). Seul
+ * l'email d'un destinataire non inscrit — saisi par l'expéditeur lui-même — reste.
+ */
+function withoutPrivateEmail(p: HumlinkerParticipant): HumlinkerParticipant {
+  if (!p || p.isPlaceholder || p.email == null) return p;
+  return { ...p, email: null };
 }

@@ -60,7 +60,11 @@ describe('MessagesService.sendMessage — profils actuels transmis à l’IA', (
     };
     service = new MessagesService(
       { findById: jest.fn(async () => humlinker) } as never,
-      { findByHumlinker: jest.fn(async () => []), create: jest.fn() },
+      {
+        findByHumlinker: jest.fn(async () => []),
+        findBetween: jest.fn(async () => []),
+        create: jest.fn(),
+      },
       {
         findLastSentDrafts: jest.fn(async () => []),
         findActiveDraft: jest.fn(async () => null),
@@ -88,6 +92,7 @@ describe('MessagesService.sendMessage — profils actuels transmis à l’IA', (
         recordAiCostOnly: jest.fn(),
       } as never,
       { app: {} } as never,
+      {} as never,
     );
     (service as any).pushDraftVersion = jest.fn();
   });
@@ -117,6 +122,13 @@ describe('MessagesService.sendMessage — profils actuels transmis à l’IA', (
     users.marco = liveUser('marco', 'de', { isPlaceholder: true });
     await service.sendMessage('h1', 'aaron', 'salut');
     expect(aiContext.targetLanguage).toBe('fr');
+  });
+
+  it('expéditeur sans compte (lien « Répondre ») : langue de la photo, pas du placeholder', async () => {
+    users.aaron = liveUser('aaron', 'de', { isPlaceholder: true });
+    users.marco = liveUser('marco', 'fr');
+    await service.sendMessage('h1', 'aaron', 'hello');
+    expect(aiContext.senderLanguage).toBe('fr');
   });
 });
 
@@ -153,7 +165,11 @@ describe('MessagesService — effacer la discussion (de son côté)', () => {
     update = jest.fn(async () => humlinker);
     service = new MessagesService(
       { findById: jest.fn(async () => humlinker), update } as never,
-      { findByHumlinker, create: jest.fn() },
+      {
+        findByHumlinker,
+        findBetween: jest.fn(async () => []),
+        create: jest.fn(),
+      },
       {
         findLastSentDrafts: jest.fn(async () => []),
         findActiveDraft: jest.fn(async () => null),
@@ -184,6 +200,7 @@ describe('MessagesService — effacer la discussion (de son côté)', () => {
         recordAiCostOnly: jest.fn(),
       } as never,
       { app: {} } as never,
+      {} as never,
     );
     (service as any).pushDraftVersion = jest.fn();
     (service as any).listDraftVersionObjectives = jest.fn(async () => []);
@@ -216,5 +233,152 @@ describe('MessagesService — effacer la discussion (de son côté)', () => {
       'propre fil',
     );
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('MessagesService — résumé des longues conversations', () => {
+  const msg = (i: number) => ({
+    _id: `m${i}`,
+    type: 'text',
+    content: `message ${i}`,
+    createdAt: new Date(2026, 0, 1, 0, i),
+  });
+  let findBetween: jest.Mock;
+  let update: jest.Mock;
+  let summarize: jest.Mock;
+  let recordAiCostOnly: jest.Mock;
+  let service: MessagesService;
+
+  beforeEach(() => {
+    findBetween = jest.fn(async () =>
+      Array.from({ length: 12 }, (_, i) => msg(i)),
+    );
+    update = jest.fn();
+    summarize = jest.fn(async () => ({
+      summary: 'Résumé des échanges',
+      usage: { inputTokens: 10, outputTokens: 5 },
+    }));
+    recordAiCostOnly = jest.fn();
+    service = new MessagesService(
+      { update } as never,
+      { findBetween } as never,
+      {} as never,
+      {} as never,
+      { summarizeHistory: summarize } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { recordAiCostOnly } as never,
+      { app: {} } as never,
+      {} as never,
+    );
+  });
+
+  const humlinker = {
+    _id: 'h1',
+    contextSummary: 'Ancien résumé',
+    contextSummaryUntil: new Date(2025, 0, 1),
+  } as never;
+
+  it('fenêtre pleine (50 messages) → résume les messages plus anciens', async () => {
+    const window = Array.from({ length: 50 }, (_, i) => msg(100 + i));
+    await service.refreshContextSummary(
+      humlinker,
+      window as never,
+      'A',
+      'B',
+      'fr',
+    );
+    expect(findBetween).toHaveBeenCalledWith(
+      'h1',
+      new Date(2025, 0, 1),
+      window[0].createdAt,
+      200,
+    );
+    expect(summarize).toHaveBeenCalledWith(
+      expect.objectContaining({ previousSummary: 'Ancien résumé' }),
+    );
+    expect(update).toHaveBeenCalledWith('h1', {
+      contextSummary: 'Résumé des échanges',
+      contextSummaryUntil: msg(11).createdAt,
+    });
+    expect(recordAiCostOnly).toHaveBeenCalled();
+  });
+
+  it('conversation courte → aucun appel', async () => {
+    await service.refreshContextSummary(
+      humlinker,
+      [msg(1)] as never,
+      'A',
+      'B',
+      'fr',
+    );
+    expect(findBetween).not.toHaveBeenCalled();
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it('un échec du résumé ne casse rien', async () => {
+    summarize.mockRejectedValue(new Error('Gemini KO'));
+    const window = Array.from({ length: 50 }, (_, i) => msg(100 + i));
+    await expect(
+      service.refreshContextSummary(humlinker, window as never, 'A', 'B', 'fr'),
+    ).resolves.toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('MessagesService — destinataire sans compte : lien « Répondre »', () => {
+  it('dépose le message dans le miroir et envoie un lien avec jeton invité', async () => {
+    const chatCreate = jest.fn();
+    const sendHumlinkerMessage = jest.fn();
+    const sign = jest.fn(() => 'jeton-invite');
+    const service = new MessagesService(
+      {} as never,
+      { create: chatCreate } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { sendHumlinkerMessage } as never,
+      {} as never,
+      {} as never,
+      {
+        app: {
+          downloadUrl: 'https://humlinker.app/download',
+          frontendUrl: 'https://app.humlinker.com',
+        },
+      } as never,
+      { sign } as never,
+    );
+
+    await (service as any).dispatchToTarget(
+      {
+        _id: 'h1',
+        mirrorId: 'm1',
+        targetId: 'placeholder-1',
+        communicationChannel: 'email',
+        sender: { firstName: 'Aaron', lastName: null },
+        target: { isPlaceholder: true, email: 'lea@humlinker.test' },
+      },
+      'Hi Lea!',
+    );
+
+    expect(chatCreate).toHaveBeenCalledWith({
+      humhlinkerId: 'm1',
+      role: 'user',
+      type: 'real_message',
+      content: 'Hi Lea!',
+    });
+    expect(sign).toHaveBeenCalledWith(
+      { userId: 'placeholder-1', scope: 'guest', humlinkerId: 'm1' },
+      { expiresIn: '30d' },
+    );
+    expect(sendHumlinkerMessage).toHaveBeenCalledWith(
+      'lea@humlinker.test',
+      'Aaron',
+      'Hi Lea!',
+      'https://humlinker.app/download',
+      'https://app.humlinker.com/reply/jeton-invite',
+    );
   });
 });

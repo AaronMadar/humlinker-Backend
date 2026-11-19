@@ -362,6 +362,17 @@ export class StripeService {
     });
   }
 
+  /** Résiliation immédiate (suppression de compte) — sans effet si déjà terminée. */
+  async cancelSubscriptionNow(subscriptionId: string): Promise<void> {
+    try {
+      await this.client().subscriptions.cancel(subscriptionId);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === 'resource_missing') return;
+      throw err;
+    }
+  }
+
   /** Relit l'abonnement chez Stripe et recopie son état sur l'utilisateur. */
   async syncSubscription(subscriptionId: string): Promise<void> {
     const sub = await this.client().subscriptions.retrieve(subscriptionId);

@@ -77,6 +77,8 @@ model User {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   lastLoginAt DateTime?
+  /// Compte supprimé (RGPD) : données personnelles effacées, connexion impossible
+  deletedAt   DateTime?
 
   sentHumlinkers     Humlinker[]   @relation("HumlinkerSender")
   receivedHumlinkers Humlinker[]   @relation("HumlinkerTarget")
@@ -116,12 +118,17 @@ model Humlinker {
   senderSnapshot       Json
   targetSnapshot       Json
 
-  lastActivityAt DateTime @default(now())
+  lastActivityAt      DateTime  @default(now())
   /// « Effacer la discussion » : messages antérieurs masqués à l'écran pour ce côté,
   /// mais toujours transmis à l'IA comme contexte. null = rien d'effacé.
-  historyClearedAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  historyClearedAt    DateTime?
+  /// Résumé des messages trop anciens pour la fenêtre de contexte de l'IA (50 derniers),
+  /// mis à jour au fil de l'eau : l'IA garde le fil des longues conversations.
+  contextSummary      String?
+  /// Date du dernier message couvert par contextSummary
+  contextSummaryUntil DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   senderUser   User          @relation("HumlinkerSender", fields: [senderId], references: [id])
   targetUser   User          @relation("HumlinkerTarget", fields: [targetId], references: [id])
@@ -142,6 +149,9 @@ model Draft {
   humhlinkerId     String
   objectiveMessage String
   realMessage      String
+  /// Le message transmis, dans la langue de l'expéditeur (= realMessage si même langue).
+  /// C'est ce que l'expéditeur voit : « Voici ce que je vais transmettre ».
+  senderPreview    String   @default("")
   version          Int
   isSent           Boolean  @default(false)
   createdAt        DateTime @default(now())

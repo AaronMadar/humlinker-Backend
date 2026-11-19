@@ -35,6 +35,7 @@ import {
   AiModule,
   AuthModule,
   BillingModule,
+  ExportModule,
   HumlinkerModule,
   MessagesModule,
   HealthModule,
@@ -57,6 +58,7 @@ import {
     UsersModule,
     HumlinkerModule,
     MessagesModule,
+    ExportModule,         // Export daté et vérifiable de l'historique
   ],
 })
 export class AppModule {}

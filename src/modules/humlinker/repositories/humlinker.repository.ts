@@ -33,6 +33,8 @@ export interface UpdateHumlinkerData {
   senderSnapshot?: HumlinkerParticipant;
   targetSnapshot?: HumlinkerParticipant;
   historyClearedAt?: Date | null;
+  contextSummary?: string | null;
+  contextSummaryUntil?: Date | null;
 }
 
 export interface HumlinkerRepository {

@@ -49,7 +49,13 @@ export class HumlinkerGateway
       const token =
         (socket.handshake.auth?.token as string)?.replace('Bearer ', '') ?? '';
 
-      const payload = this.jwtService.verify<{ userId: string }>(token);
+      const payload = this.jwtService.verify<{
+        userId: string;
+        scope?: string;
+      }>(token);
+      // Jeton invité : accès limité à UN humlinker par HTTP ; la room user:<id>
+      // recevrait les événements de toutes ses conversations → refusé.
+      if (payload.scope) throw new Error('guest token');
       socket.data.userId = payload.userId;
 
       // Chaque user rejoint sa room personnelle → ciblage précis des events

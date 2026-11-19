@@ -40,6 +40,7 @@ export interface CreateDraftData {
   humhlinkerId: string;
   objectiveMessage: string;
   realMessage: string;
+  senderPreview?: string;
   version: number;
   isSent?: boolean;
 }
@@ -47,4 +48,5 @@ export interface CreateDraftData {
 export interface UpdateDraftData {
   objectiveMessage?: string;
   realMessage?: string;
+  senderPreview?: string;
 }

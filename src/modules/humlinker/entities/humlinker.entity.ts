@@ -79,6 +79,10 @@ export interface Humlinker {
   lastActivityAt: Date;
   /** Messages antérieurs masqués à l'écran (toujours fournis à l'IA) */
   historyClearedAt: Date | null;
+  /** Résumé des échanges trop anciens pour la fenêtre de contexte de l'IA */
+  contextSummary: string | null;
+  /** Date du dernier message couvert par le résumé */
+  contextSummaryUntil: Date | null;
   /** Contenu du dernier real_message (preview sidebar) */
   lastMessage?: string;
   createdAt: Date;

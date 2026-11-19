@@ -10,9 +10,10 @@
  *  sendDraft()      → user clique Send → realMessage envoyé au target
  *
  * ─── Confidentialité ───────────────────────────────────────────────────────
- *  - objectiveMessage : visible par le sender dans l'interface draft
- *  - realMessage      : JAMAIS exposé au sender — uniquement stocké en DB
- *                       et transmis au target lors du Send
+ *  - objectiveMessage : intention consolidée, usage interne de l'IA
+ *  - realMessage      : le message exact transmis au target (sa langue)
+ *  - senderPreview    : ce même message dans la langue du sender — il le relit
+ *                       avant d'envoyer (« Voici ce que je vais transmettre »)
  *
  * ─── Draft lifecycle ───────────────────────────────────────────────────────
  *  1. Premier message → crée le Draft (version 1)
@@ -24,6 +25,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { ChatMessage, Draft, Humlinker } from '../humlinker/entities';
@@ -51,9 +53,15 @@ import {
 import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 import { RedisService } from '../../redis/redis.service';
 import { QuotaService } from '../billing/quota.service';
+import { JwtService } from '@nestjs/jwt';
+import { signGuestToken } from '../auth/guest/guest-token';
 
 const EMPTY_DRAFT_OBJECTIVE = 'Rien à transmettre pour le moment.';
 const CHAT_HISTORY_LIMIT = 30;
+/** Messages récents transmis tels quels à l'IA ; au-delà → résumé */
+const AI_HISTORY_WINDOW = 50;
+/** Nombre minimum de messages anciens non résumés avant de (re)lancer un résumé */
+const SUMMARY_MIN_BATCH = 10;
 const MAX_PAGE_SIZE = 100;
 const SENT_DRAFTS_CONTEXT = 10;
 /** Versions du draft actif en cache Redis (objectiveMessage + realMessage) */
@@ -64,7 +72,13 @@ const MAX_DRAFT_VERSIONS = 20;
 interface DraftVersion {
   objectiveMessage: string;
   realMessage: string;
+  /** Absent dans les versions enregistrées avant l'aperçu */
+  senderPreview?: string;
 }
+
+/** Ce que l'expéditeur voit d'une version : le message transmis, dans sa langue */
+const previewOf = (v: { senderPreview?: string; realMessage: string }) =>
+  v.senderPreview || v.realMessage;
 
 export interface ChatResponse {
   /** Messages du chat triés chronologiquement (30 derniers) */
@@ -82,6 +96,10 @@ export interface SafeDraft {
   _id: string;
   humhlinkerId: string;
   objectiveMessage: string;
+  /** Le message exact que recevra le Target (dans sa langue) */
+  realMessage: string;
+  /** Ce même message dans la langue de l'expéditeur — affiché « Voici ce que je vais transmettre » */
+  senderPreview: string;
   version: number;
   isSent: boolean;
   createdAt: Date;
@@ -89,6 +107,8 @@ export interface SafeDraft {
 
 @Injectable()
 export class MessagesService {
+  private readonly logger = new Logger(MessagesService.name);
+
   constructor(
     @Inject(HUMLINKER_REPOSITORY)
     private readonly humlinkerRepository: HumlinkerRepository,
@@ -105,6 +125,7 @@ export class MessagesService {
     private readonly quotaService: QuotaService,
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
+    private readonly jwtService: JwtService,
   ) {}
 
   // ─── Lecture ──────────────────────────────────────────────────────────────
@@ -182,7 +203,7 @@ export class MessagesService {
     // 1. Contexte IA (historique AVANT le nouveau message, transmis à part)
     const chatHistory = await this.chatMessageRepository.findByHumlinker(
       humhlinkerId,
-      { limit: 50 },
+      { limit: AI_HISTORY_WINDOW },
     );
     const lastSentDrafts = await this.draftRepository.findLastSentDrafts(
       humhlinkerId,
@@ -198,7 +219,10 @@ export class MessagesService {
       this.usersRepository.findById(userId),
       this.usersRepository.findById(humlinker.targetId),
     ]);
-    const sender = senderUser ?? humlinker.sender;
+    // Expéditeur sans compte (réponse via le lien « Répondre ») : son compte
+    // placeholder garde la langue de celui qui l'a créé → on prend la photo.
+    const sender =
+      senderUser && !senderUser.isPlaceholder ? senderUser : humlinker.sender;
     const target =
       targetUser && !targetUser.isPlaceholder ? targetUser : humlinker.target;
     const fullName = (p: {
@@ -218,6 +242,7 @@ export class MessagesService {
       chatHistory,
       currentDraft,
       newMessage: content,
+      contextSummary: humlinker.contextSummary,
     };
 
     // 2. Appel Gemini. En cas d'échec, RIEN n'est enregistré (ni message ni
@@ -238,6 +263,16 @@ export class MessagesService {
       aiResult.usage,
     );
 
+    // Longue conversation : on résume en arrière-plan ce qui sort de la fenêtre
+    // de contexte (n'attend pas, ne bloque jamais la réponse à l'utilisateur)
+    void this.refreshContextSummary(
+      humlinker,
+      chatHistory,
+      aiContext.senderName,
+      aiContext.targetName,
+      aiContext.senderLanguage,
+    );
+
     // 3. Sauvegarde le message de l'utilisateur (seulement après succès)
     await this.chatMessageRepository.create({
       humhlinkerId,
@@ -254,12 +289,14 @@ export class MessagesService {
           (await this.draftRepository.update(currentDraft._id, {
             objectiveMessage: aiResult.objectiveMessage,
             realMessage: aiResult.realMessage,
+            senderPreview: aiResult.senderPreview,
           })) ?? currentDraft;
       } else {
         updatedDraft = await this.draftRepository.create({
           humhlinkerId,
           objectiveMessage: aiResult.objectiveMessage,
           realMessage: aiResult.realMessage,
+          senderPreview: aiResult.senderPreview,
           version: 1,
         });
       }
@@ -274,6 +311,7 @@ export class MessagesService {
       await this.pushDraftVersion(humhlinkerId, {
         objectiveMessage: aiResult.objectiveMessage,
         realMessage: aiResult.realMessage,
+        senderPreview: aiResult.senderPreview,
       });
     }
 
@@ -281,6 +319,50 @@ export class MessagesService {
       activeDraft: this.toSafeDraft(updatedDraft),
       notice: aiResult.notice,
     };
+  }
+
+  // ─── Résumé des longues conversations ─────────────────────────────────────
+
+  /**
+   * Quand la fenêtre de contexte (50 messages) est pleine, résume les messages
+   * plus anciens non encore couverts et met à jour humlinker.contextSummary.
+   * Ne lève jamais : un échec laisse simplement l'ancien résumé en place.
+   */
+  async refreshContextSummary(
+    humlinker: Humlinker,
+    window: ChatMessage[],
+    senderName: string,
+    targetName: string,
+    language: string,
+  ): Promise<void> {
+    try {
+      if (window.length < AI_HISTORY_WINDOW) return;
+      const oldestInWindow = window[0].createdAt;
+      const older = await this.chatMessageRepository.findBetween(
+        humlinker._id,
+        humlinker.contextSummaryUntil,
+        oldestInWindow,
+        200,
+      );
+      // On attend d'avoir un lot suffisant pour limiter le nombre d'appels
+      if (older.length < SUMMARY_MIN_BATCH) return;
+      const { summary, usage } = await this.aiService.summarizeHistory({
+        previousSummary: humlinker.contextSummary,
+        messages: older,
+        senderName,
+        targetName,
+        language,
+      });
+      await this.quotaService.recordAiCostOnly(usage);
+      await this.humlinkerRepository.update(humlinker._id, {
+        contextSummary: summary,
+        contextSummaryUntil: older[older.length - 1].createdAt,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Résumé de contexte non mis à jour (${humlinker._id}) : ${(err as Error).message}`,
+      );
+    }
   }
 
   // ─── Effacer la discussion (de son côté uniquement) ───────────────────────
@@ -337,19 +419,21 @@ export class MessagesService {
         (await this.draftRepository.update(activeDraft._id, {
           objectiveMessage: selected.objectiveMessage,
           realMessage: selected.realMessage,
+          senderPreview: selected.senderPreview ?? selected.realMessage,
         })) ?? activeDraft;
     } else {
       updatedDraft = await this.draftRepository.create({
         humhlinkerId,
         objectiveMessage: selected.objectiveMessage,
         realMessage: selected.realMessage,
+        senderPreview: selected.senderPreview ?? selected.realMessage,
         version: 1,
       });
     }
 
     return {
       activeDraft: this.toSafeDraft(updatedDraft),
-      draftVersions: versions.map((v) => v.objectiveMessage),
+      draftVersions: versions.map(previewOf),
     };
   }
 
@@ -399,7 +483,7 @@ export class MessagesService {
       humhlinkerId,
       role: 'system',
       type: 'draft_snapshot',
-      content: activeDraft.objectiveMessage,
+      content: previewOf(activeDraft),
       draftId: activeDraft._id,
     });
 
@@ -462,8 +546,7 @@ export class MessagesService {
     // Déduplique : ignore si identique à la dernière version
     if (
       versions.length > 0 &&
-      versions[versions.length - 1].objectiveMessage ===
-        version.objectiveMessage
+      previewOf(versions[versions.length - 1]) === previewOf(version)
     )
       return;
     versions.push(version);
@@ -492,7 +575,7 @@ export class MessagesService {
     humhlinkerId: string,
   ): Promise<string[]> {
     const versions = await this.listDraftVersions(humhlinkerId);
-    return versions.map((v) => v.objectiveMessage);
+    return versions.map(previewOf);
   }
 
   /**
@@ -501,8 +584,10 @@ export class MessagesService {
    * Regle principale :
    *  - Target inscrit (non-placeholder) -> toujours via l'app (push + mirror),
    *    quel que soit le communicationChannel configure.
-   *  - Target placeholder (pas de compte) -> SMS ou email one-way avec invitation
-   *    a telecharger Humlinker. Le target ne peut PAS repondre depuis SMS/email.
+   *  - Target placeholder (pas de compte), canal email -> email avec un lien
+   *    « Repondre » (jeton invite, 30 jours) vers une page web sans compte.
+   *    Le message est aussi enregistre dans son humlinker miroir pour qu'il
+   *    le retrouve sur cette page.
    */
   private async dispatchToTarget(
     humlinker: Humlinker,
@@ -548,11 +633,29 @@ export class MessagesService {
       const email = humlinker.target.email;
       if (!email) return;
 
+      // Sans miroir (données anciennes) : pas de page de réponse possible
+      let replyUrl: string | null = null;
+      if (humlinker.mirrorId) {
+        await this.chatMessageRepository.create({
+          humhlinkerId: humlinker.mirrorId,
+          role: 'user',
+          type: 'real_message',
+          content: realMessage,
+        });
+        const token = signGuestToken(
+          this.jwtService,
+          targetId,
+          humlinker.mirrorId,
+        );
+        replyUrl = `${this.config.app.frontendUrl}/reply/${token}`;
+      }
+
       await this.mailService.sendHumlinkerMessage(
         email,
         senderName,
         realMessage,
         downloadUrl,
+        replyUrl,
       );
       return;
     }
@@ -575,6 +678,8 @@ export class MessagesService {
       _id: draft._id,
       humhlinkerId: draft.humhlinkerId,
       objectiveMessage: draft.objectiveMessage,
+      realMessage: draft.realMessage,
+      senderPreview: previewOf(draft),
       version: draft.version,
       isSent: draft.isSent,
       createdAt: draft.createdAt,

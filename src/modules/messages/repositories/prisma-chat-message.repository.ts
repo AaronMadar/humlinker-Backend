@@ -34,6 +34,23 @@ export class PrismaChatMessageRepository implements ChatMessageRepository {
     return rows.reverse().map((r) => this.toChatMessage(r as never));
   }
 
+  async findBetween(
+    humhlinkerId: string,
+    after: Date | null,
+    before: Date,
+    limit: number,
+  ): Promise<ChatMessage[]> {
+    const rows = await this.prisma.chatMessage.findMany({
+      where: {
+        humhlinkerId,
+        createdAt: { lt: before, ...(after ? { gt: after } : {}) },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+    return rows.map((r) => this.toChatMessage(r as never));
+  }
+
   async create(data: CreateChatMessageData): Promise<ChatMessage> {
     const row = await this.prisma.chatMessage.create({
       data: {

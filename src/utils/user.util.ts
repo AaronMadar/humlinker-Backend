@@ -8,7 +8,10 @@ import type { User } from '../modules/users/entities';
 export type SafeUser = Omit<
   User,
   'passwordHash' | 'fcmToken' | 'stripeCustomerId' | 'stripeSubscriptionId'
->;
+>& {
+  /** Le compte a un mot de passe (confirmation demandée pour les actions sensibles) */
+  hasPassword: boolean;
+};
 
 /**
  * Retire passwordHash et fcmToken avant de retourner un user au frontend.
@@ -21,7 +24,7 @@ export function sanitizeUser(user: User): SafeUser {
     stripeSubscriptionId: _ss,
     ...safeUser
   } = user;
-  return safeUser;
+  return { ...safeUser, hasPassword: !!user.passwordHash };
 }
 
 /**
