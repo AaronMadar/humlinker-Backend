@@ -26,36 +26,53 @@ export class MailService {
 
   /**
    * Envoie le message d'un humlinker au destinataire non inscrit par email.
-   * One-way : aucune reponse possible. Le destinataire est invite a telecharger Humlinker.
+   * Avec replyUrl : bouton « Repondre » vers une page web sans compte (jeton
+   * invite, 30 jours). Sans replyUrl : one-way, invitation a telecharger Humlinker.
    */
   async sendHumlinkerMessage(
     to: string,
     senderName: string,
     message: string,
     downloadUrl: string,
+    replyUrl: string | null = null,
   ): Promise<void> {
     // Contenu fourni par l'utilisateur → toujours échappé dans le HTML
     const safeName = escapeHtml(singleLine(senderName));
     const safeMessage = escapeHtml(message).replace(/\r?\n/g, '<br>');
     const safeUrl = escapeHtml(downloadUrl);
+    const buttonStyle =
+      'display:inline-block;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin:8px 8px 0 0;';
+
+    const text = replyUrl
+      ? senderName + ' vous transmet :\n\n"' + message + '"\n\n' +
+        "Pour repondre (sans installer d'application) : " + replyUrl + '\n' +
+        'Ou telechargez Humlinker : ' + downloadUrl + '\n'
+      : senderName + ' vous transmet :\n\n"' + message + '"\n\n' +
+        'Pour repondre, telechargez Humlinker : ' + downloadUrl + '\n' +
+        'Le chat apparaitra et vous pourrez repondre directement.';
+
+    const actions = replyUrl
+      ? "<p style=\"color:#555;font-size:14px;\">Vous pouvez repondre directement depuis votre navigateur, sans installer d'application.</p>" +
+        '<a href="' + escapeHtml(replyUrl) + '" style="' + buttonStyle + 'background:#4F46E5;color:white;">' + escapeHtml('Repondre') + '</a>' +
+        '<a href="' + safeUrl + '" style="' + buttonStyle + 'background:white;color:#4F46E5;border:1px solid #4F46E5;">Telecharger Humlinker</a>' +
+        '<p style="color:#999;font-size:12px;margin-top:24px;">Ce lien est personnel et valable 30 jours : ne le transferez pas.</p>'
+      : '<p style="color:#555;font-size:14px;">Vous souhaitez repondre ? Telechargez <strong>Humlinker</strong> et le fil apparaitra automatiquement.</p>' +
+        '<a href="' + safeUrl + '" style="display:inline-block;background:#4F46E5;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:8px;">Telecharger Humlinker</a>' +
+        '<p style="color:#999;font-size:12px;margin-top:24px;">Ce message a ete transmis via Humlinker. Vous ne pouvez pas repondre directement a cet email.</p>';
+
     try {
       await this.transporter.sendMail({
         from: this.config.mail.from,
         to,
         subject: singleLine(senderName) + ' vous a envoye un message via Humlinker',
-        text:
-          senderName + ' vous transmet :\n\n"' + message + '"\n\n' +
-          'Pour repondre, telechargez Humlinker : ' + downloadUrl + '\n' +
-          'Le chat apparaitra et vous pourrez repondre directement.',
+        text,
         html:
           '<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#333;">' +
           '<h2 style="color:#4F46E5;">Message de ' + safeName + '</h2>' +
           '<div style="background:#F9FAFB;border-left:4px solid #4F46E5;padding:16px 20px;border-radius:4px;margin:16px 0;">' +
           '<p style="margin:0;font-size:15px;line-height:1.6;">' + safeMessage + '</p>' +
           '</div>' +
-          '<p style="color:#555;font-size:14px;">Vous souhaitez repondre ? Telechargez <strong>Humlinker</strong> et le fil apparaitra automatiquement.</p>' +
-          '<a href="' + safeUrl + '" style="display:inline-block;background:#4F46E5;color:white;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:8px;">Telecharger Humlinker</a>' +
-          '<p style="color:#999;font-size:12px;margin-top:24px;">Ce message a ete transmis via Humlinker. Vous ne pouvez pas repondre directement a cet email.</p>' +
+          actions +
           '</div>',
       });
       this.logger.log('Humlinker message sent to ' + to);

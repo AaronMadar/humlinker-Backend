@@ -4,6 +4,11 @@ export default () => ({
     env: process.env.NODE_ENV ?? 'development',
     port: parseInt(process.env.PORT ?? '3000', 10),
     url: process.env.APP_URL ?? 'http://localhost:3000',
+    /** URL publique du front (la 1re si FRONTEND_URL en liste plusieurs) — liens des emails */
+    frontendUrl: (process.env.FRONTEND_URL ?? 'http://localhost:5173')
+      .split(',')[0]
+      .trim()
+      .replace(/\/$/, ''),
     downloadUrl:
       process.env.APP_DOWNLOAD_URL ?? 'https://humlinker.app/download',
   },

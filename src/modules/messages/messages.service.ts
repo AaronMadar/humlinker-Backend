@@ -53,6 +53,8 @@ import {
 import { USERS_REPOSITORY, type UsersRepository } from '../users/repositories';
 import { RedisService } from '../../redis/redis.service';
 import { QuotaService } from '../billing/quota.service';
+import { JwtService } from '@nestjs/jwt';
+import { signGuestToken } from '../auth/guest/guest-token';
 
 const EMPTY_DRAFT_OBJECTIVE = 'Rien à transmettre pour le moment.';
 const CHAT_HISTORY_LIMIT = 30;
@@ -123,6 +125,7 @@ export class MessagesService {
     private readonly quotaService: QuotaService,
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
+    private readonly jwtService: JwtService,
   ) {}
 
   // ─── Lecture ──────────────────────────────────────────────────────────────
@@ -216,7 +219,10 @@ export class MessagesService {
       this.usersRepository.findById(userId),
       this.usersRepository.findById(humlinker.targetId),
     ]);
-    const sender = senderUser ?? humlinker.sender;
+    // Expéditeur sans compte (réponse via le lien « Répondre ») : son compte
+    // placeholder garde la langue de celui qui l'a créé → on prend la photo.
+    const sender =
+      senderUser && !senderUser.isPlaceholder ? senderUser : humlinker.sender;
     const target =
       targetUser && !targetUser.isPlaceholder ? targetUser : humlinker.target;
     const fullName = (p: {
@@ -578,8 +584,10 @@ export class MessagesService {
    * Regle principale :
    *  - Target inscrit (non-placeholder) -> toujours via l'app (push + mirror),
    *    quel que soit le communicationChannel configure.
-   *  - Target placeholder (pas de compte) -> SMS ou email one-way avec invitation
-   *    a telecharger Humlinker. Le target ne peut PAS repondre depuis SMS/email.
+   *  - Target placeholder (pas de compte), canal email -> email avec un lien
+   *    « Repondre » (jeton invite, 30 jours) vers une page web sans compte.
+   *    Le message est aussi enregistre dans son humlinker miroir pour qu'il
+   *    le retrouve sur cette page.
    */
   private async dispatchToTarget(
     humlinker: Humlinker,
@@ -625,11 +633,29 @@ export class MessagesService {
       const email = humlinker.target.email;
       if (!email) return;
 
+      // Sans miroir (données anciennes) : pas de page de réponse possible
+      let replyUrl: string | null = null;
+      if (humlinker.mirrorId) {
+        await this.chatMessageRepository.create({
+          humhlinkerId: humlinker.mirrorId,
+          role: 'user',
+          type: 'real_message',
+          content: realMessage,
+        });
+        const token = signGuestToken(
+          this.jwtService,
+          targetId,
+          humlinker.mirrorId,
+        );
+        replyUrl = `${this.config.app.frontendUrl}/reply/${token}`;
+      }
+
       await this.mailService.sendHumlinkerMessage(
         email,
         senderName,
         realMessage,
         downloadUrl,
+        replyUrl,
       );
       return;
     }

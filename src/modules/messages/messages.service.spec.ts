@@ -92,6 +92,7 @@ describe('MessagesService.sendMessage — profils actuels transmis à l’IA', (
         recordAiCostOnly: jest.fn(),
       } as never,
       { app: {} } as never,
+      {} as never,
     );
     (service as any).pushDraftVersion = jest.fn();
   });
@@ -121,6 +122,13 @@ describe('MessagesService.sendMessage — profils actuels transmis à l’IA', (
     users.marco = liveUser('marco', 'de', { isPlaceholder: true });
     await service.sendMessage('h1', 'aaron', 'salut');
     expect(aiContext.targetLanguage).toBe('fr');
+  });
+
+  it('expéditeur sans compte (lien « Répondre ») : langue de la photo, pas du placeholder', async () => {
+    users.aaron = liveUser('aaron', 'de', { isPlaceholder: true });
+    users.marco = liveUser('marco', 'fr');
+    await service.sendMessage('h1', 'aaron', 'hello');
+    expect(aiContext.senderLanguage).toBe('fr');
   });
 });
 
@@ -192,6 +200,7 @@ describe('MessagesService — effacer la discussion (de son côté)', () => {
         recordAiCostOnly: jest.fn(),
       } as never,
       { app: {} } as never,
+      {} as never,
     );
     (service as any).pushDraftVersion = jest.fn();
     (service as any).listDraftVersionObjectives = jest.fn(async () => []);
@@ -261,6 +270,7 @@ describe('MessagesService — résumé des longues conversations', () => {
       {} as never,
       { recordAiCostOnly } as never,
       { app: {} } as never,
+      {} as never,
     );
   });
 
@@ -314,5 +324,61 @@ describe('MessagesService — résumé des longues conversations', () => {
       service.refreshContextSummary(humlinker, window as never, 'A', 'B', 'fr'),
     ).resolves.toBeUndefined();
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('MessagesService — destinataire sans compte : lien « Répondre »', () => {
+  it('dépose le message dans le miroir et envoie un lien avec jeton invité', async () => {
+    const chatCreate = jest.fn();
+    const sendHumlinkerMessage = jest.fn();
+    const sign = jest.fn(() => 'jeton-invite');
+    const service = new MessagesService(
+      {} as never,
+      { create: chatCreate } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { sendHumlinkerMessage } as never,
+      {} as never,
+      {} as never,
+      {
+        app: {
+          downloadUrl: 'https://humlinker.app/download',
+          frontendUrl: 'https://app.humlinker.com',
+        },
+      } as never,
+      { sign } as never,
+    );
+
+    await (service as any).dispatchToTarget(
+      {
+        _id: 'h1',
+        mirrorId: 'm1',
+        targetId: 'placeholder-1',
+        communicationChannel: 'email',
+        sender: { firstName: 'Aaron', lastName: null },
+        target: { isPlaceholder: true, email: 'lea@humlinker.test' },
+      },
+      'Hi Lea!',
+    );
+
+    expect(chatCreate).toHaveBeenCalledWith({
+      humhlinkerId: 'm1',
+      role: 'user',
+      type: 'real_message',
+      content: 'Hi Lea!',
+    });
+    expect(sign).toHaveBeenCalledWith(
+      { userId: 'placeholder-1', scope: 'guest', humlinkerId: 'm1' },
+      { expiresIn: '30d' },
+    );
+    expect(sendHumlinkerMessage).toHaveBeenCalledWith(
+      'lea@humlinker.test',
+      'Aaron',
+      'Hi Lea!',
+      'https://humlinker.app/download',
+      'https://app.humlinker.com/reply/jeton-invite',
+    );
   });
 });
