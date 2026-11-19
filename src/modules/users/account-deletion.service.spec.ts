@@ -23,13 +23,15 @@ describe('AccountDeletionService', () => {
     };
     const redis = { del: jest.fn().mockResolvedValue(undefined) };
     const stripe = { cancelSubscriptionNow: jest.fn().mockResolvedValue(undefined) };
+    const sessions = { revokeAll: jest.fn().mockResolvedValue(1) };
     const service = new AccountDeletionService(
       usersRepository as never,
       prisma as never,
       redis as never,
       stripe as never,
+      sessions as never,
     );
-    return { service, prisma, redis, stripe };
+    return { service, prisma, redis, stripe, sessions };
   }
 
   it('anonymise le compte, supprime son côté et bloque le côté des autres', async () => {
@@ -50,6 +52,12 @@ describe('AccountDeletionService', () => {
     expect(anon).toMatchObject({ email: null, phoneNumber: null, passwordHash: null, firstName: null });
     expect(anon.deletedAt).toBeInstanceOf(Date);
     expect(redis.del).toHaveBeenCalledTimes(2);
+  });
+
+  it('révoque toutes les sessions du compte supprimé', async () => {
+    const { service, sessions } = setup({ ...baseUser });
+    await service.deleteAccount('u1');
+    expect(sessions.revokeAll).toHaveBeenCalledWith('u1');
   });
 
   it('résilie l’abonnement Stripe actif', async () => {

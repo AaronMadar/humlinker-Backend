@@ -14,9 +14,10 @@ import { USERS_REPOSITORY } from './repositories/users.repository';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { AccountDeletionService } from './account-deletion.service';
+import { SessionsModule } from '../auth/sessions/sessions.module';
 
 @Module({
-  imports: [forwardRef(() => AuthModule)],
+  imports: [forwardRef(() => AuthModule), SessionsModule],
   controllers: [UsersController],
   providers: [
     UsersService,

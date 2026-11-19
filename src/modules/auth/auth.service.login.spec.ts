@@ -1,6 +1,6 @@
 import { HttpStatus, UnauthorizedException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import type { JwtService } from '@nestjs/jwt';
+import type { SessionService } from './sessions/session.service';
 import { FakeRedisService } from '@/redis/redis.service.fake';
 import type { RedisService } from '@/redis/redis.service';
 import type { UsersRepository } from '../users/repositories';
@@ -22,13 +22,15 @@ describe('AuthService.login — anti brute-force', () => {
       updateLastLoginAt: jest.fn(async () => user),
     } as unknown as UsersRepository;
     const config = { google: { clientId: 'x' } } as never;
-    const jwt = { sign: jest.fn(() => 'token') } as unknown as JwtService;
+    const sessions = {
+      createSession: jest.fn(async () => ({ token: 'token', refreshToken: 'sid.secret' })),
+    } as unknown as SessionService;
 
     redis = new FakeRedisService();
     service = new AuthService(
       repo,
       config,
-      jwt,
+      sessions,
       {} as OtpService,
       redis as unknown as RedisService,
     );

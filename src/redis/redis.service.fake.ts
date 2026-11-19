@@ -14,6 +14,9 @@ export class FakeRedisService implements Pick<
   | 'incrByWithTtl'
   | 'setIfAbsent'
   | 'ttl'
+  | 'sadd'
+  | 'srem'
+  | 'smembers'
 > {
   private store = new Map<
     string,
@@ -80,5 +83,27 @@ export class FakeRedisService implements Pick<
   async ttl(key: string) {
     const entry = this.alive(key);
     return entry?.expiresAt ? entry.expiresAt - this.now : 0;
+  }
+
+  // Ensembles : stockés sérialisés (JSON) dans la même table
+  async sadd(key: string, member: string, ttlSeconds: number) {
+    const members = new Set(await this.smembers(key));
+    members.add(member);
+    this.store.set(key, {
+      value: JSON.stringify([...members]),
+      expiresAt: this.now + ttlSeconds,
+    });
+  }
+
+  async srem(key: string, member: string) {
+    const entry = this.alive(key);
+    if (!entry) return;
+    const members = (JSON.parse(entry.value) as string[]).filter((m) => m !== member);
+    entry.value = JSON.stringify(members);
+  }
+
+  async smembers(key: string) {
+    const entry = this.alive(key);
+    return entry ? (JSON.parse(entry.value) as string[]) : [];
   }
 }

@@ -32,6 +32,7 @@ import {
 import { OtpService } from '../auth/services/otp.service';
 import { RedisService } from '../../redis/redis.service';
 import { PrismaService } from '../../database';
+import { SessionService } from '../auth/sessions/session.service';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -66,6 +67,7 @@ export class UsersService {
     private readonly eventEmitter: EventEmitter2,
     private readonly redisService: RedisService,
     private readonly prisma: PrismaService,
+    private readonly sessions: SessionService,
   ) {}
 
   async getMe(userId: string): Promise<SafeUser> {
@@ -170,7 +172,17 @@ export class UsersService {
     return sanitizeUser(updated);
   }
 
-  async updatePassword(userId: string, dto: UpdatePasswordDto): Promise<void> {
+  /**
+   * Change le mot de passe puis ferme toutes les AUTRES sessions. La session
+   * courante est conservée : un nouveau jeton d'accès (nouvelle version) est
+   * renvoyé — et un nouveau jeton de rafraîchissement si l'appel venait d'un
+   * ancien jeton sans session.
+   */
+  async updatePassword(
+    userId: string,
+    dto: UpdatePasswordDto,
+    currentSid?: string,
+  ): Promise<{ token: string; refreshToken?: string }> {
     const user = await this.findUserOrThrow(userId);
     if (!user.passwordHash) {
       throw new BadRequestException(
@@ -186,6 +198,17 @@ export class UsersService {
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
     const updated = await this.usersRepository.update(userId, { passwordHash });
     if (!updated) throw new NotFoundException('Utilisateur introuvable.');
+
+    const keepSid =
+      currentSid && (await this.sessions.isSessionActive(currentSid))
+        ? currentSid
+        : null;
+    const tokenVersion = await this.sessions.revokeAll(userId, { exceptSid: keepSid });
+    const sessionUser = { _id: updated._id, role: updated.role, tokenVersion };
+    if (keepSid) {
+      return { token: this.sessions.signAccessToken(sessionUser, keepSid) };
+    }
+    return this.sessions.createSession(sessionUser);
   }
 
   async updateFcmToken(userId: string, fcmToken: string): Promise<void> {

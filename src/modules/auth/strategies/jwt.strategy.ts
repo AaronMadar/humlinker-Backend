@@ -8,6 +8,7 @@ import {
   type UsersRepository,
 } from '@/modules/users/repositories';
 import { GUEST_SCOPE } from '../guest/guest-token';
+import { SessionService } from '../sessions/session.service';
 import type { AuthenticatedUser, JwtPayload } from '../interfaces/jwt-payload.interface';
 
 @Injectable()
@@ -17,6 +18,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly config: ReturnType<typeof configuration>,
     @Inject(USERS_REPOSITORY)
     private readonly usersRepository: UsersRepository,
+    private readonly sessions: SessionService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -50,9 +52,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       };
     }
 
+    // Session : version (déconnexion de tous les appareils, mot de passe changé…)
+    // et session encore ouverte (déconnexion de cet appareil, réutilisation détectée)
+    if (!(await this.sessions.isAccessPayloadValid(payload, user.tokenVersion ?? 0))) {
+      throw new UnauthorizedException('Session expirée ou révoquée');
+    }
+
     return {
       userId: user._id,
       role: user.role,
+      ...(payload.sid && { sid: payload.sid }),
     };
   }
 }

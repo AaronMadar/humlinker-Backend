@@ -38,6 +38,7 @@ function toUser(record: PrismaUser): User {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     lastLoginAt: record.lastLoginAt,
+    tokenVersion: record.tokenVersion,
   };
 }
 

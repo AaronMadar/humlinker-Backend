@@ -8,6 +8,10 @@ export interface JwtPayload {
   scope?: 'guest';
   /** Humlinker miroir accessible avec un jeton invité */
   humlinkerId?: string;
+  /** Version des sessions de l'utilisateur au moment de l'émission (User.tokenVersion) */
+  tv?: number;
+  /** Identifiant de session (famille de jetons de rafraîchissement) */
+  sid?: string;
 }
 
 export interface AuthenticatedUser {
@@ -16,4 +20,6 @@ export interface AuthenticatedUser {
   /** Présent uniquement pour un jeton invité (voir GuestScopeGuard) */
   scope?: 'guest';
   humlinkerId?: string;
+  /** Session courante (absent pour les jetons invités et les anciens jetons) */
+  sid?: string;
 }

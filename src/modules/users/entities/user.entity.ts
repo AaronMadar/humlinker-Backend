@@ -44,4 +44,6 @@ export interface User {
   createdAt: Date;
   updatedAt: Date;
   lastLoginAt: Date | null;
+  /** Version des sessions (voir SessionService) — jamais renvoyée au client */
+  tokenVersion?: number;
 }

@@ -78,13 +78,22 @@ export class UsersController {
   }
 
   @Patch('me/password')
-  @ApiOperation({ summary: 'Changer mon mot de passe' })
+  @ApiOperation({
+    summary: 'Changer mon mot de passe',
+    description:
+      "Déconnecte tous les autres appareils. Renvoie un nouveau jeton d'accès pour cet appareil (à stocker à la place de l'ancien).",
+  })
   async updatePassword(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: UpdatePasswordDto,
-  ): Promise<AppApiResponse<{ message: string }>> {
-    await this.usersService.updatePassword(user.userId, dto);
-    return { success: true, data: { message: 'Mot de passe mis à jour.' }, timestamp: new Date().toISOString() };
+  ): Promise<AppApiResponse<{ message: string; token: string; refreshToken?: string }>> {
+    // Les autres appareils sont déconnectés ; celui-ci reçoit un nouveau jeton
+    const tokens = await this.usersService.updatePassword(user.userId, dto, user.sid);
+    return {
+      success: true,
+      data: { message: 'Mot de passe mis à jour.', ...tokens },
+      timestamp: new Date().toISOString(),
+    };
   }
 
   @Patch('me/fcm-token')

@@ -21,6 +21,10 @@ export default () => ({
     secret:
       process.env.JWT_SECRET ?? 'humlinker-dev-secret-change-in-production',
     expiresIn: process.env.JWT_EXPIRATION ?? '24h',
+    /** Jeton d'accès des sessions (court) — renouvelé via POST /auth/refresh */
+    accessExpiresIn: process.env.JWT_ACCESS_EXPIRATION ?? '15m',
+    /** Jeton de rafraîchissement : durée de vie glissante (jours), rotation à chaque usage */
+    refreshTtlDays: parseInt(process.env.JWT_REFRESH_TTL_DAYS ?? '30', 10),
   },
 
   redis: {
