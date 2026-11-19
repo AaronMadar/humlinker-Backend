@@ -265,3 +265,81 @@ describe('StripeService — webhooks', () => {
     expect(retrieve).not.toHaveBeenCalled();
   });
 });
+
+describe('StripeService — multi-devises', () => {
+  let service: StripeService;
+  let created: any;
+  let prisma: any;
+
+  beforeEach(() => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test_dummy';
+    process.env.STRIPE_PRICE_PRO_MONTHLY = 'price_month';
+    process.env.STRIPE_PRICE_PRO_YEARLY = 'price_year';
+    prisma = {
+      user: {
+        findUnique: jest.fn(async () => ({
+          id: 'u1',
+          email: 'a@b.com',
+          firstName: 'A',
+          lastName: null,
+          stripeCustomerId: 'cus_1',
+          stripeSubscriptionId: null,
+          subscriptionStatus: null,
+        })),
+        update: jest.fn(),
+      },
+    };
+    service = new StripeService(prisma);
+    created = undefined;
+    const price = (id: string, eur: number, opts: Record<string, number>) => ({
+      id,
+      currency: 'eur',
+      unit_amount: eur,
+      currency_options: Object.fromEntries(
+        Object.entries(opts).map(([c, a]) => [c, { unit_amount: a }]),
+      ),
+    });
+    (service as any).stripe.prices = {
+      retrieve: jest.fn(async (id: string) =>
+        id === 'price_month'
+          ? price(id, 699, { usd: 799, gbp: 599, ils: 2590, jpy: 1200 })
+          : price(id, 5900, { usd: 6500, gbp: 5000, ils: 21200 }),
+      ),
+    };
+    (service as any).stripe.checkout = {
+      sessions: {
+        create: jest.fn(async (params: unknown) => {
+          created = params;
+          return { url: 'https://checkout.stripe.com/c/test' };
+        }),
+      },
+    };
+  });
+
+  it('renvoie chaque formule dans les 4 devises gérées (les autres sont ignorées)', async () => {
+    const prices = await service.getPrices();
+    expect(prices).toEqual([
+      { interval: 'month', currency: 'eur', amount: 699 },
+      { interval: 'month', currency: 'usd', amount: 799 },
+      { interval: 'month', currency: 'gbp', amount: 599 },
+      { interval: 'month', currency: 'ils', amount: 2590 },
+      { interval: 'year', currency: 'eur', amount: 5900 },
+      { interval: 'year', currency: 'usd', amount: 6500 },
+      { interval: 'year', currency: 'gbp', amount: 5000 },
+      { interval: 'year', currency: 'ils', amount: 21200 },
+    ]);
+  });
+
+  it('encaisse dans la devise demandée par le client', async () => {
+    await service.createCheckoutSession('u1', 'year', 'ils');
+    expect(created).toMatchObject({
+      currency: 'ils',
+      line_items: [{ price: 'price_year' }],
+    });
+  });
+
+  it('dollar par défaut si aucune devise n’est précisée', async () => {
+    await service.createCheckoutSession('u1', 'month');
+    expect(created).toMatchObject({ currency: 'usd' });
+  });
+});

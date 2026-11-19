@@ -1,6 +1,7 @@
-import { IsIn } from 'class-validator';
+import { IsIn, IsOptional } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
-import type { BillingInterval } from '../stripe.service';
+import { SUPPORTED_CURRENCIES } from '../stripe.service';
+import type { BillingCurrency, BillingInterval } from '../stripe.service';
 
 export class CheckoutDto {
   @ApiProperty({
@@ -10,4 +11,15 @@ export class CheckoutDto {
   })
   @IsIn(['month', 'year'])
   interval!: BillingInterval;
+
+  @ApiProperty({
+    enum: SUPPORTED_CURRENCIES,
+    required: false,
+    example: 'usd',
+    description:
+      'Devise de paiement selon la localisation du client (défaut : usd).',
+  })
+  @IsOptional()
+  @IsIn(SUPPORTED_CURRENCIES)
+  currency?: BillingCurrency;
 }

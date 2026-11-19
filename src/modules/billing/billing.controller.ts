@@ -81,6 +81,7 @@ export class BillingController {
     const url = await this.stripeService.createCheckoutSession(
       user.userId,
       dto.interval,
+      dto.currency,
     );
     return {
       success: true,
