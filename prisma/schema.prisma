@@ -117,6 +117,9 @@ model Humlinker {
   targetSnapshot       Json
 
   lastActivityAt DateTime @default(now())
+  /// « Effacer la discussion » : messages antérieurs masqués à l'écran pour ce côté,
+  /// mais toujours transmis à l'IA comme contexte. null = rien d'effacé.
+  historyClearedAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

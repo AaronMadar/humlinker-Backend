@@ -1,7 +1,11 @@
 /**
  * HumlinkerRepository — interface du repository humlinker.
  */
-import type { Humlinker, HumlinkerParticipant, HumlinkerStatus } from '../entities';
+import type {
+  Humlinker,
+  HumlinkerParticipant,
+  HumlinkerStatus,
+} from '../entities';
 
 export const HUMLINKER_REPOSITORY = Symbol('HUMLINKER_REPOSITORY');
 
@@ -28,15 +32,26 @@ export interface UpdateHumlinkerData {
   communicationChannel?: Humlinker['communicationChannel'];
   senderSnapshot?: HumlinkerParticipant;
   targetSnapshot?: HumlinkerParticipant;
+  historyClearedAt?: Date | null;
 }
 
 export interface HumlinkerRepository {
   findById(id: string): Promise<Humlinker | null>;
-  findAllByUserId(userId: string, options?: { limit?: number; offset?: number }): Promise<Humlinker[]>;
-  findBySenderAndTarget(senderId: string, targetId: string): Promise<Humlinker | null>;
+  findAllByUserId(
+    userId: string,
+    options?: { limit?: number; offset?: number },
+  ): Promise<Humlinker[]>;
+  findBySenderAndTarget(
+    senderId: string,
+    targetId: string,
+  ): Promise<Humlinker | null>;
   findAllByTargetId(targetId: string): Promise<Humlinker[]>;
   findAllBySenderId(senderId: string): Promise<Humlinker[]>;
   create(data: CreateHumlinkerData): Promise<Humlinker>;
   update(id: string, data: UpdateHumlinkerData): Promise<Humlinker | null>;
-  blockBoth(humhlinkerId: string, mirrorId: string, blockedBy: string): Promise<void>;
+  blockBoth(
+    humhlinkerId: string,
+    mirrorId: string,
+    blockedBy: string,
+  ): Promise<void>;
 }

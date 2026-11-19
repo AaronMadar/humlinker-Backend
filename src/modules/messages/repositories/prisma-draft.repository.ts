@@ -24,7 +24,10 @@ export class PrismaDraftRepository implements DraftRepository {
     return row ? this.toDraft(row) : null;
   }
 
-  async findLastSentDrafts(humhlinkerId: string, limit: number): Promise<Draft[]> {
+  async findLastSentDrafts(
+    humhlinkerId: string,
+    limit: number,
+  ): Promise<Draft[]> {
     const rows = await this.prisma.draft.findMany({
       where: { humhlinkerId, isSent: true },
       orderBy: { version: 'desc' },

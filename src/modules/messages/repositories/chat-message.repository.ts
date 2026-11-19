@@ -16,7 +16,8 @@ export interface ChatMessageRepository {
    */
   findByHumlinker(
     humhlinkerId: string,
-    options?: { limit?: number; offset?: number },
+    /** `after` : ne charge que les messages postérieurs (fil effacé à l'écran) */
+    options?: { limit?: number; offset?: number; after?: Date | null },
   ): Promise<ChatMessage[]>;
 
   /** Crée un message dans le chat */

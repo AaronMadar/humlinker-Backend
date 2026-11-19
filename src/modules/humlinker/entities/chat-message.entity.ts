@@ -24,7 +24,12 @@
 
 export type ChatMessageRole = 'user' | 'ai' | 'system';
 
-export type ChatMessageType = 'text' | 'draft_snapshot' | 'system' | 'target_reply' | 'real_message';
+export type ChatMessageType =
+  | 'text'
+  | 'draft_snapshot'
+  | 'system'
+  | 'target_reply'
+  | 'real_message';
 
 export interface ChatMessage {
   _id: string;

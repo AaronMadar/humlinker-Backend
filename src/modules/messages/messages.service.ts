@@ -119,7 +119,7 @@ export class MessagesService {
     options: { limit?: number; offset?: number } = {},
   ): Promise<ChatResponse> {
     // Contrôle d'accès : lève 403/404 si l'utilisateur n'est pas participant
-    await this.getHumlinkerOrThrow(humhlinkerId, userId);
+    const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
 
     // Pagination bornée (un limit énorme chargerait tout l'historique en mémoire)
     const limit = Math.min(
@@ -129,9 +129,10 @@ export class MessagesService {
     const offset = Math.max(0, options.offset || 0);
 
     // On charge limit+1 pour savoir s'il y a une page suivante
+    // Fil effacé : seuls les messages postérieurs s'affichent (l'IA voit tout)
     const messages = await this.chatMessageRepository.findByHumlinker(
       humhlinkerId,
-      { limit: limit + 1, offset },
+      { limit: limit + 1, offset, after: humlinker.historyClearedAt },
     );
 
     const hasMore = messages.length > limit;
@@ -280,6 +281,30 @@ export class MessagesService {
       activeDraft: this.toSafeDraft(updatedDraft),
       notice: aiResult.notice,
     };
+  }
+
+  // ─── Effacer la discussion (de son côté uniquement) ───────────────────────
+
+  /**
+   * Masque l'historique à l'écran pour CE côté du humlinker :
+   *  - rien ne change pour l'autre participant (son humlinker miroir est distinct) ;
+   *  - la reformulation en cours (draft non envoyé) est conservée ;
+   *  - l'IA continue de recevoir les anciens messages comme contexte.
+   */
+  async clearHistory(
+    humhlinkerId: string,
+    userId: string,
+  ): Promise<{ historyClearedAt: Date }> {
+    const humlinker = await this.getHumlinkerOrThrow(humhlinkerId, userId);
+    // Chaque participant ne peut effacer que SON côté (le humlinker dont il est l'émetteur)
+    if (humlinker.senderId !== userId) {
+      throw new ForbiddenException(
+        'Vous ne pouvez effacer que votre propre fil de discussion.',
+      );
+    }
+    const historyClearedAt = new Date();
+    await this.humlinkerRepository.update(humhlinkerId, { historyClearedAt });
+    return { historyClearedAt };
   }
 
   // ─── Restauration d'une version précédente du draft ──────────────────────
