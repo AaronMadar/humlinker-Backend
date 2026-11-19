@@ -4,6 +4,7 @@ API NestJS de Humlinker : deux personnes communiquent **uniquement par l'interm�
 
 **Stack** : NestJS 11 · PostgreSQL (Prisma 5) · Redis · Socket.io · Gemini (`@google/genai`) · Stripe · Firebase (push) · Twilio (SMS) · Nodemailer.
 
+**Allumer l'application pas à pas : [docs/DEMARRAGE.md](docs/DEMARRAGE.md).**
 Plan de mise en production et avancement : [docs/PLAN_PRODUCTION.md](docs/PLAN_PRODUCTION.md).
 
 ---
