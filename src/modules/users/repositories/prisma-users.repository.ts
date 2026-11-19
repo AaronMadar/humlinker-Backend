@@ -46,7 +46,10 @@ export class PrismaUsersRepository implements UsersRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async findById(id: string): Promise<User | null> {
-    const record = await this.prisma.user.findUnique({ where: { id } });
+    // Un compte supprimé n'existe plus pour l'application (JWT encore valides refusés)
+    const record = await this.prisma.user.findFirst({
+      where: { id, deletedAt: null },
+    });
     return record ? toUser(record) : null;
   }
 
@@ -58,8 +61,8 @@ export class PrismaUsersRepository implements UsersRepository {
   }
 
   async findByPin(pin: string): Promise<User | null> {
-    const record = await this.prisma.user.findUnique({
-      where: { pin: pin.toUpperCase() },
+    const record = await this.prisma.user.findFirst({
+      where: { pin: pin.toUpperCase(), deletedAt: null },
     });
     return record ? toUser(record) : null;
   }

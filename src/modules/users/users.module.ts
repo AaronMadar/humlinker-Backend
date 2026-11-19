@@ -13,12 +13,14 @@ import { PrismaUsersRepository } from './repositories/prisma-users.repository';
 import { USERS_REPOSITORY } from './repositories/users.repository';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { AccountDeletionService } from './account-deletion.service';
 
 @Module({
   imports: [forwardRef(() => AuthModule)],
   controllers: [UsersController],
   providers: [
     UsersService,
+    AccountDeletionService,
     OtpService,
     PrismaUsersRepository,
     {

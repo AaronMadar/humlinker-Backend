@@ -358,7 +358,7 @@ export class HumlinkerService {
       userId: event.userId,
       firstName: event.firstName,
       lastName: event.lastName,
-      email: event.email,
+      email: null,
       language: event.language,
       gender: event.gender,
       profilePicture: event.profilePicture,
@@ -421,7 +421,8 @@ export class HumlinkerService {
       userId: user._id,
       firstName: user.firstName,
       lastName: user.lastName,
-      email: user.email,
+      // Email privé des inscrits : jamais partagé avec l'autre participant
+      email: user.isPlaceholder ? user.email : null,
       language: user.language,
       gender: user.gender,
       profilePicture: user.profilePicture,

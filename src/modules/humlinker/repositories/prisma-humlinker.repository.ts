@@ -184,8 +184,8 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       targetContactName: row.targetContactName,
       relationshipType: row.relationshipType,
       title: row.title,
-      sender: row.senderSnapshot as HumlinkerParticipant,
-      target: row.targetSnapshot as HumlinkerParticipant,
+      sender: withoutPrivateEmail(row.senderSnapshot as HumlinkerParticipant),
+      target: withoutPrivateEmail(row.targetSnapshot as HumlinkerParticipant),
       lastActivityAt: row.lastActivityAt,
       historyClearedAt: row.historyClearedAt,
       contextSummary: row.contextSummary,
@@ -195,4 +195,14 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       updatedAt: row.updatedAt,
     };
   }
+}
+
+/**
+ * L'email d'un utilisateur inscrit est une donnée privée : il n'est jamais
+ * renvoyé à l'autre participant (ni stocké dans les nouveaux snapshots). Seul
+ * l'email d'un destinataire non inscrit — saisi par l'expéditeur lui-même — reste.
+ */
+function withoutPrivateEmail(p: HumlinkerParticipant): HumlinkerParticipant {
+  if (!p || p.isPlaceholder || p.email == null) return p;
+  return { ...p, email: null };
 }

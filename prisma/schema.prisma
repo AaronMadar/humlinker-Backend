@@ -77,6 +77,8 @@ model User {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   lastLoginAt DateTime?
+  /// Compte supprimé (RGPD) : données personnelles effacées, connexion impossible
+  deletedAt   DateTime?
 
   sentHumlinkers     Humlinker[]   @relation("HumlinkerSender")
   receivedHumlinkers Humlinker[]   @relation("HumlinkerTarget")
