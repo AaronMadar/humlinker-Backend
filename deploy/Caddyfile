@@ -1,0 +1,36 @@
+# Point d'entrée unique : https://{$DOMAIN}
+#   /api/*       → backend NestJS
+#   /socket.io/* → temps réel (WebSocket)
+#   le reste     → site React (fichiers statiques, routes gérées par React)
+# Certificat HTTPS Let's Encrypt obtenu et renouvelé automatiquement.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy backend:3000
+	}
+	handle /socket.io/* {
+		reverse_proxy backend:3000
+	}
+
+	handle {
+		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}

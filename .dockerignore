@@ -10,3 +10,4 @@ test
 scripts
 coverage
 *.log
+deploy

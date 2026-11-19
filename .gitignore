@@ -46,7 +46,6 @@ Thumbs.db
 # TypeORM / Prisma (if used)
 ormconfig.json
 prisma/dev.db
-prisma/migrations/
 *.db
 
 # Temporary files
@@ -69,3 +68,7 @@ jest-cache/
 # pnpm-lock.yaml
 # Rapports de l'évaluation IA (npm run eval:ai)
 test/ai-eval/reports/
+
+# Production (secrets et sauvegardes du serveur)
+deploy/.env
+deploy/backups/
