@@ -112,6 +112,12 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
           ...(data.historyClearedAt !== undefined && {
             historyClearedAt: data.historyClearedAt,
           }),
+          ...(data.contextSummary !== undefined && {
+            contextSummary: data.contextSummary,
+          }),
+          ...(data.contextSummaryUntil !== undefined && {
+            contextSummaryUntil: data.contextSummaryUntil,
+          }),
         },
       });
       return this.toHumlinker(row);
@@ -155,6 +161,8 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
     createdAt: Date;
     updatedAt: Date;
     historyClearedAt: Date | null;
+    contextSummary: string | null;
+    contextSummaryUntil: Date | null;
     chatMessages?: { content: string; createdAt: Date }[];
   }): Humlinker {
     const last = row.chatMessages?.[0];
@@ -180,6 +188,8 @@ export class PrismaHumlinkerRepository implements HumlinkerRepository {
       target: row.targetSnapshot as HumlinkerParticipant,
       lastActivityAt: row.lastActivityAt,
       historyClearedAt: row.historyClearedAt,
+      contextSummary: row.contextSummary,
+      contextSummaryUntil: row.contextSummaryUntil,
       lastMessage: lastVisible,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

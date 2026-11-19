@@ -43,6 +43,7 @@ export class PrismaDraftRepository implements DraftRepository {
         humhlinkerId: data.humhlinkerId,
         objectiveMessage: data.objectiveMessage,
         realMessage: data.realMessage,
+        senderPreview: data.senderPreview ?? '',
         version: data.version,
         isSent: data.isSent ?? false,
       },
@@ -60,6 +61,9 @@ export class PrismaDraftRepository implements DraftRepository {
           }),
           ...(data.realMessage !== undefined && {
             realMessage: data.realMessage,
+          }),
+          ...(data.senderPreview !== undefined && {
+            senderPreview: data.senderPreview,
           }),
         },
       });
@@ -86,6 +90,7 @@ export class PrismaDraftRepository implements DraftRepository {
     humhlinkerId: string;
     objectiveMessage: string;
     realMessage: string;
+    senderPreview: string;
     version: number;
     isSent: boolean;
     createdAt: Date;
@@ -95,6 +100,7 @@ export class PrismaDraftRepository implements DraftRepository {
       humhlinkerId: row.humhlinkerId,
       objectiveMessage: row.objectiveMessage,
       realMessage: row.realMessage,
+      senderPreview: row.senderPreview,
       version: row.version,
       isSent: row.isSent,
       createdAt: row.createdAt,

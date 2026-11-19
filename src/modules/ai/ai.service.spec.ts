@@ -31,6 +31,7 @@ const good = (over: Record<string, unknown> = {}) =>
   JSON.stringify({
     objectiveMessage: 'Vous souhaitez informer Marc que…',
     realMessage: 'Léa souhaite vous informer que…',
+    senderPreview: '',
     draftChanged: true,
     outOfScope: false,
     contentRefused: false,
@@ -80,6 +81,7 @@ describe('buildAiPayload — anti prompt-injection', () => {
       'participants',
       'historique',
       'anciens_drafts',
+      'resume_anterieur',
       'objectif_actuel',
       'nouveau_message',
     ]);

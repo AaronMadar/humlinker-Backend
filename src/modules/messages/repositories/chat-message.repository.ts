@@ -20,6 +20,17 @@ export interface ChatMessageRepository {
     options?: { limit?: number; offset?: number; after?: Date | null },
   ): Promise<ChatMessage[]>;
 
+  /**
+   * Messages strictement postérieurs à `after` (ou depuis le début) et antérieurs
+   * à `before`, du plus ancien au plus récent — sert au résumé de contexte.
+   */
+  findBetween(
+    humhlinkerId: string,
+    after: Date | null,
+    before: Date,
+    limit: number,
+  ): Promise<ChatMessage[]>;
+
   /** Crée un message dans le chat */
   create(data: CreateChatMessageData): Promise<ChatMessage>;
 }
