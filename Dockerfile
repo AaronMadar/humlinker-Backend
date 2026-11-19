@@ -4,8 +4,9 @@
 # Les migrations sont appliquées au démarrage (prisma migrate deploy).
 
 # 1. Build : dépendances complètes + compilation TypeScript
-FROM node:22-alpine AS build
+FROM node:22-slim AS build
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY prisma ./prisma
@@ -15,10 +16,10 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # 2. Exécution : uniquement le nécessaire, utilisateur non-root
-FROM node:22-alpine AS runtime
+FROM node:22-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-RUN apk add --no-cache openssl
+RUN apt-get update && apt-get install -y --no-install-recommends openssl wget && rm -rf /var/lib/apt/lists/*
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/prisma ./prisma
