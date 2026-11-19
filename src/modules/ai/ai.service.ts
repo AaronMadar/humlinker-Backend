@@ -43,7 +43,7 @@ export interface AiUsage {
 }
 
 /** Pourquoi l'IA n'a pas produit de nouveau draft (affiché au Sender). */
-export type AiNotice = 'out_of_scope' | 'content_refused';
+export type AiNotice = 'out_of_scope' | 'content_refused' | 'nothing_new';
 
 export interface AiDraftResult {
   objectiveMessage: string;
@@ -129,11 +129,40 @@ const REQUIRED_SCRIPT: Record<string, RegExp> = {
 /** true si le texte n'est manifestement pas écrit dans la langue attendue. */
 export function isWrongScript(text: string, language: string): boolean {
   const script = REQUIRED_SCRIPT[language];
-  return !!script && !!text && !script.test(text);
+  if (!script || !text) return false;
+  // Alphabet absent, ou phrase mélangée avec des mots outils latins (« de mardi »).
+  // Les noms propres en lettres latines restent autorisés.
+  return !script.test(text) || LATIN_FUNCTION_WORDS.test(text);
 }
+
+/** Mots outils français/anglais qui n'ont rien à faire dans une phrase en hébreu/arabe. */
+const LATIN_FUNCTION_WORDS =
+  /(^|[^\p{L}])(de|du|des|la|le|les|et|à|au|the|of|and|to|in|on)(?=$|[^\p{L}])/iu;
 
 /** Langues où le verbe s'accorde au genre de l'interlocuteur (raisonnement activé). */
 const GENDERED_GRAMMAR_LANGUAGES = ['he', 'ar'];
+
+/** Mots d'un texte, sans ponctuation ni casse (comparaison d'intentions). */
+function words(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length > 2),
+  );
+}
+
+/**
+ * true si deux objectifs expriment la même intention (≥ 80 % de mots communs).
+ * Sert à détecter un brouillon qui repropose ce qui a déjà été envoyé.
+ */
+export function isSameIntention(a: string, b: string): boolean {
+  const wa = words(a);
+  const wb = words(b);
+  if (!wa.size || !wb.size) return false;
+  const common = [...wa].filter((w) => wb.has(w)).length;
+  return common / new Set([...wa, ...wb]).size >= 0.8;
+}
 
 const MAX_ATTEMPTS = 2;
 
@@ -383,16 +412,45 @@ export class AiService {
 
         const parsed = parseAiResponse(call.text ?? '');
 
+        // Rien n'est transmis : le draft actuel reste tel quel
+        const keepCurrent = (notice: AiNotice): AiDraftResult => ({
+          objectiveMessage:
+            context.currentDraft?.objectiveMessage ?? EMPTY_OBJECTIVES[1],
+          realMessage: context.currentDraft?.realMessage ?? '',
+          draftChanged: false,
+          notice,
+          usage,
+        });
+
         if (parsed.outOfScope || parsed.contentRefused) {
-          // Rien n'est transmis : le draft actuel reste tel quel
-          return {
-            objectiveMessage:
-              context.currentDraft?.objectiveMessage ?? EMPTY_OBJECTIVES[1],
-            realMessage: context.currentDraft?.realMessage ?? '',
-            draftChanged: false,
-            notice: parsed.contentRefused ? 'content_refused' : 'out_of_scope',
-            usage,
-          };
+          return keepCurrent(
+            parsed.contentRefused ? 'content_refused' : 'out_of_scope',
+          );
+        }
+
+        // Juste après un envoi (brouillon vide) et rien de nouveau → on le dit
+        const draftIsEmpty =
+          !context.currentDraft?.objectiveMessage ||
+          EMPTY_OBJECTIVES.includes(context.currentDraft.objectiveMessage);
+        if (draftIsEmpty && !parsed.draftChanged) {
+          return keepCurrent('nothing_new');
+        }
+
+        // Le brouillon repropose-t-il une intention DÉJÀ envoyée ?
+        const alreadySent = [
+          ...context.lastSentDrafts.map((d) => d.objectiveMessage),
+          ...context.chatHistory
+            .filter((m) => m.type === 'draft_snapshot')
+            .map((m) => m.content),
+        ];
+        const resend =
+          parsed.draftChanged &&
+          alreadySent.some((sent) =>
+            isSameIntention(parsed.objectiveMessage, sent),
+          );
+        if (resend && attempt >= MAX_ATTEMPTS) {
+          this.logger.warn('Intention déjà envoyée reproposée — ignorée');
+          return keepCurrent('nothing_new');
         }
         // Mauvaise langue (hébreu/arabe attendus mais absents) → on refait une fois
         const wrongLanguage =
@@ -404,8 +462,14 @@ export class AiService {
           parsed.realMessage,
           context.targetLanguage,
         );
-        if ((wrongLanguage || generalization) && attempt < MAX_ATTEMPTS) {
+        if (
+          (wrongLanguage || generalization || resend) &&
+          attempt < MAX_ATTEMPTS
+        ) {
           const problems = [
+            resend
+              ? 'objectiveMessage repropose une intention DÉJÀ transmise au Target (draft_envoye_au_target / anciens_drafts) : ne garde que ce que nouveau_message apporte de nouveau ; s’il n’apporte rien de nouveau, mets draftChanged à false et objectiveMessage = realMessage = ""'
+              : '',
             wrongLanguage
               ? `objectiveMessage doit être en ${languageLabel(context.senderLanguage)} et realMessage en ${languageLabel(context.targetLanguage)}`
               : '',
@@ -436,7 +500,11 @@ export class AiService {
           `Gemini essai ${attempt}/${MAX_ATTEMPTS} échoué (${e.name}: ${e.message})${retry ? ' — nouvel essai' : ''}`,
         );
         if (!retry) throw new AiUnavailableException(usage);
-        await new Promise((r) => setTimeout(r, 400 * attempt));
+        // Google saturé (429) : on laisse passer le pic avant de réessayer
+        const rateLimited = err instanceof ApiError && err.status === 429;
+        await new Promise((r) =>
+          setTimeout(r, rateLimited ? 2000 * attempt : 400 * attempt),
+        );
       }
     }
     throw new AiUnavailableException(usage);

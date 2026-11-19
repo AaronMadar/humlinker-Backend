@@ -91,11 +91,11 @@ npm run eval:ai     # évaluation de l'IA contre le vrai Gemini (~0,06 $)
 ```
 
 ### Évaluation de l'IA (`test/ai-eval`)
-39 cas réels en 8 catégories (transmission, fidélité des détails, désescalade, mise à jour, hors sujet, refus, sécurité, langues), joués plusieurs fois et vérifiés automatiquement : bon résultat, faits conservés, insultes et généralisations absentes, tournure indirecte, jamais de « je » du Sender, bonne langue et forme de politesse.
+41 cas réels en 8 catégories (transmission, fidélité des détails, désescalade, mise à jour, hors sujet, refus, sécurité, langues), joués plusieurs fois et vérifiés automatiquement : bon résultat, faits conservés, insultes et généralisations absentes, tournure indirecte, jamais de « je » du Sender, bonne langue et forme de politesse.
 
 - `EVAL_RUNS=5 npm run eval:ai` pour plus de confiance, `EVAL_ONLY=C` pour une seule catégorie.
 - **À relancer après toute modification du prompt ou du modèle.** Ajouter un cas à chaque défaut constaté en production.
-- Dernier résultat (19/11/2026) : **390/390 conformes** sur 2 validations × 39 cas × 5 essais (français, anglais, espagnol, allemand, hébreu, arabe ; genre de l'expéditeur connu ou non).
+- Dernier résultat (19/11/2026) : **409/410** sur 2 validations complètes × 41 cas × 5 essais, puis **80/80** sur les langues après correction du dernier défaut (mélange de langues). Couvre : français, anglais, espagnol, allemand, hébreu, arabe ; genre connu ou non ; rien de nouveau après un envoi.
 
 ---
 
