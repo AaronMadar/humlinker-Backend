@@ -111,10 +111,17 @@ Les mots de passe (base, Redis, JWT) sont déjà générés. Complète dans `nan
 - `MAIL_*` — le service d'envoi d'emails ;
 - `GOOGLE_*`, `FIREBASE_*`, `VITE_*` — connexion Google (mêmes valeurs qu'en local) ;
 - `STRIPE_*` — clés de test `sk_test_…` pour commencer (les clés live viendront avec le SIRET).
+- `TWILIO_*` — SMS de vérification du téléphone (obligatoire en production).
+
+⚠️ En production, le backend **refuse de démarrer** s'il manque une clé obligatoire
+(email, SMS, webhook Stripe…) : le message d'erreur liste ce qui manque
+(`docker compose -f docker-compose.prod.yml logs backend`).
 
 Enregistrer : `Ctrl+O`, Entrée, `Ctrl+X`. **Ne colle jamais ces clés dans une discussion.**
 
 ## Étape 7 — Lancer
+
+(Pile testée en local à l'identique : site, API, temps réel, HTTPS et migrations sur base vide.)
 
 ```bash
 cd ~/humlinker/humlinker-Backend/deploy
