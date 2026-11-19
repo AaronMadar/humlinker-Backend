@@ -30,6 +30,14 @@ import { getAllowedOrigins } from '../../config/env.validation';
 
 export type BillingInterval = 'month' | 'year';
 
+/**
+ * Devises proposées au paiement (montants définis dans scripts/stripe-setup.ts,
+ * attachés au même prix Stripe via currency_options). Le front choisit selon la
+ * localisation du client ; dollar par défaut.
+ */
+export const SUPPORTED_CURRENCIES = ['eur', 'usd', 'gbp', 'ils'] as const;
+export type BillingCurrency = (typeof SUPPORTED_CURRENCIES)[number];
+
 /** Marge après la fin de période pour laisser le temps au renouvellement d'arriver. */
 const RENEWAL_GRACE_DAYS = 2;
 /** Délai d'accès Pro maintenu quand le paiement du renouvellement échoue. */
@@ -150,17 +158,27 @@ export class StripeService {
     ) {
       return this.pricesCache.prices;
     }
+    // Un prix Stripe = une devise principale + d'autres devises (currency_options)
     const prices: PublicPrice[] = [];
     for (const interval of ['month', 'year'] as const) {
       const id = this.priceId(interval);
       if (!id) continue;
-      const price = await this.client().prices.retrieve(id);
-      if (price.unit_amount !== null && price.unit_amount !== undefined) {
-        prices.push({
-          interval,
-          amount: price.unit_amount,
-          currency: price.currency,
-        });
+      const price = await this.client().prices.retrieve(id, {
+        expand: ['currency_options'],
+      });
+      const amounts: Record<string, number | null | undefined> = {
+        [price.currency]: price.unit_amount,
+        ...Object.fromEntries(
+          Object.entries(price.currency_options ?? {}).map(([cur, opt]) => [
+            cur,
+            opt.unit_amount,
+          ]),
+        ),
+      };
+      for (const currency of SUPPORTED_CURRENCIES) {
+        const amount = amounts[currency];
+        if (typeof amount === 'number')
+          prices.push({ interval, amount, currency });
       }
     }
     this.pricesCache = { at: Date.now(), prices };
@@ -172,6 +190,8 @@ export class StripeService {
   async createCheckoutSession(
     userId: string,
     interval: BillingInterval,
+    // Défaut : dollar (le front envoie la devise du pays du client : €, £, ₪)
+    currency: BillingCurrency = 'usd',
   ): Promise<string> {
     const stripe = this.client();
     const price = this.priceId(interval);
@@ -197,6 +217,8 @@ export class StripeService {
       customer: customerId,
       client_reference_id: userId,
       line_items: [{ price, quantity: 1 }],
+      // Devise choisie par l'utilisateur (montant défini dans currency_options du prix)
+      currency,
       allow_promotion_codes: true,
       customer_update: { address: 'auto', name: 'auto' },
       subscription_data: { metadata: { userId } },

@@ -3,16 +3,17 @@
  *
  * Crée ou retrouve, sur le compte de STRIPE_SECRET_KEY :
  *  - le produit « Humlinker Pro » et ses deux prix (mensuel, annuel), repérés
- *    par leurs lookup_keys ;
+ *    par leurs lookup_keys, en EUR + autres devises (USD, GBP, ILS) ;
  *  - la configuration du portail client (résiliation en fin de période,
  *    changement de carte, factures, passage mensuel ↔ annuel).
  *
- *   npm run stripe:setup               → affiche les identifiants
+ *   npm run stripe:setup                → affiche les identifiants
  *   npm run stripe:setup -- --write-env → les écrit aussi dans .env
  *
- * Les montants se règlent ici (TTC, en centimes). Un prix Stripe n'est pas
- * modifiable : pour changer un montant, créer de nouveaux lookup_keys
- * (ex. humlinker_pro_monthly_v2) et relancer le script.
+ * Les montants se règlent ici (TTC, en centimes). Le montant EUR d'un prix
+ * Stripe n'est pas modifiable : pour le changer, créer de nouveaux lookup_keys
+ * (ex. humlinker_pro_monthly_v2). Les autres devises, elles, sont mises à jour
+ * en relançant le script.
  *
  * En production : relancer avec la clé sk_live_ pour créer l'offre réelle.
  */
@@ -29,22 +30,53 @@ const PRODUCT = {
   metadataValue: 'pro',
 };
 
+/**
+ * Montants TTC en centimes. EUR = prix de référence. Les autres devises valent
+ * le prix en euros au taux BCE, arrondi AU-DESSUS (jamais moins qu'en euros) :
+ * mensuel au ,99 supérieur (,90 pour le shekel), annuel à l'unité supérieure.
+ *   Taux BCE du 18/11/2026 : 1 € = 1,0968 $ = 0,8329 £ = 3,5798 ₪
+ *   6,99 € → 7,67 $ → 7,99 $  |  5,82 £ → 5,99 £  |  25,02 ₪ → 25,90 ₪
+ *   59 €   → 64,71 $ → 65 $   |  49,14 £ → 50 £   |  211,21 ₪ → 212 ₪
+ * À revoir si les taux bougent fortement, puis relancer le script.
+ *
+ * Les autres devises sont attachées au MÊME prix (currency_options) ; Checkout
+ * encaisse dans la devise envoyée par le front (selon la localisation du client,
+ * dollar par défaut). Ajouter une devise = une entrée ici + relancer le script
+ * (+ l'ajouter à SUPPORTED_CURRENCIES côté backend et à la détection du front).
+ */
 const PRICES = [
   {
     env: 'STRIPE_PRICE_PRO_MONTHLY',
     lookupKey: 'humlinker_pro_monthly',
-    amount: 699,
     interval: 'month' as const,
+    amount: 699,
+    currencyOptions: { usd: 799, gbp: 599, ils: 2590 },
   },
   {
     env: 'STRIPE_PRICE_PRO_YEARLY',
     lookupKey: 'humlinker_pro_yearly',
-    amount: 5900,
     interval: 'year' as const,
+    amount: 5900,
+    currencyOptions: { usd: 6500, gbp: 5000, ils: 21200 },
   },
 ];
 const CURRENCY = 'eur';
 const PORTAL_METADATA = { humlinker_portal: 'v1' };
+
+/** Offre proposée dans le portail : changement de formule, quantité fixée à 1. */
+const PORTAL_PRODUCT = (product: string, prices: string[]) => ({
+  product,
+  prices,
+  adjustable_quantity: { enabled: false },
+});
+
+const toCurrencyOptions = (opts: Record<string, number>) =>
+  Object.fromEntries(
+    Object.entries(opts).map(([cur, amount]) => [
+      cur,
+      { unit_amount: amount, tax_behavior: 'inclusive' as const },
+    ]),
+  );
 
 async function findOrCreateProduct(stripe: Stripe): Promise<Stripe.Product> {
   // 1) Via un prix existant : fiable immédiatement (la recherche Stripe, elle,
@@ -90,32 +122,66 @@ async function findOrCreatePrice(
     lookup_keys: [p.lookupKey],
     active: true,
     limit: 1,
+    expand: ['data.currency_options'],
   });
-  if (found.data[0]) {
-    const existing = found.data[0];
-    if (existing.unit_amount !== p.amount) {
-      console.warn(
-        `⚠ ${p.lookupKey} existe déjà à ${existing.unit_amount} centimes (demandé : ${p.amount}). ` +
-          `Un prix Stripe n'est pas modifiable : créez un nouveau lookup_key pour changer le montant.`,
+  const existing = found.data[0];
+  if (existing) {
+    const current = existing.currency_options ?? {};
+    // Un montant déjà fixé (EUR ou autre devise) n'est PAS modifiable chez Stripe
+    const changed =
+      existing.unit_amount !== p.amount ||
+      Object.entries(p.currencyOptions).some(
+        ([cur, amount]) =>
+          current[cur] !== undefined && current[cur].unit_amount !== amount,
       );
+    if (!changed) {
+      // Seules des devises nouvelles manquent : on peut les ajouter au prix existant
+      const missing = Object.keys(p.currencyOptions).filter((c) => !current[c]);
+      if (missing.length) {
+        await stripe.prices.update(existing.id, {
+          currency_options: toCurrencyOptions(p.currencyOptions),
+        });
+        console.log(
+          `~ ${p.lookupKey} : devises ajoutées (${missing.join(', ')})`,
+        );
+      }
+      console.log(`✓ Prix existant ${p.lookupKey} : ${existing.id}`);
+      return existing;
     }
-    console.log(`✓ Prix existant ${p.lookupKey} : ${existing.id}`);
-    return existing;
+    // Montant modifié → nouveau prix qui reprend le lookup_key, ancien archivé.
+    // Les abonnés existants gardent leur ancien tarif (comportement Stripe normal).
+    const price = await createPrice(stripe, productId, p, true);
+    await stripe.prices.update(existing.id, { active: false });
+    console.log(
+      `↻ ${p.lookupKey} : montants modifiés → nouveau prix ${price.id} (ancien ${existing.id} archivé)`,
+    );
+    return price;
   }
-  const price = await stripe.prices.create({
+  const price = await createPrice(stripe, productId, p, false);
+  console.log(
+    `+ Prix créé ${p.lookupKey} (${p.amount / 100} €/${p.interval} + ${Object.keys(p.currencyOptions).join(', ')}) : ${price.id}`,
+  );
+  return price;
+}
+
+function createPrice(
+  stripe: Stripe,
+  productId: string,
+  p: (typeof PRICES)[number],
+  transferLookupKey: boolean,
+): Promise<Stripe.Price> {
+  return stripe.prices.create({
     product: productId,
     currency: CURRENCY,
     unit_amount: p.amount,
     recurring: { interval: p.interval },
     lookup_key: p.lookupKey,
-    // Prix affichés TTC (B2C, France)
+    transfer_lookup_key: transferLookupKey,
+    // Prix affichés TTC (B2C)
     tax_behavior: 'inclusive',
+    currency_options: toCurrencyOptions(p.currencyOptions),
     nickname: `Humlinker Pro — ${p.interval === 'month' ? 'mensuel' : 'annuel'}`,
   });
-  console.log(
-    `+ Prix créé ${p.lookupKey} (${p.amount / 100} €/${p.interval}) : ${price.id}`,
-  );
-  return price;
 }
 
 async function findOrCreatePortal(
@@ -127,10 +193,42 @@ async function findOrCreatePortal(
     active: true,
     limit: 100,
   });
-  const existing = configs.data.find(
+  const match = configs.data.find(
     (c) => c.metadata?.humlinker_portal === PORTAL_METADATA.humlinker_portal,
   );
+  // La liste des prix proposés n'est renvoyée que sur demande (expand)
+  const existing = match
+    ? await stripe.billingPortal.configurations.retrieve(match.id, {
+        expand: ['features.subscription_update.products'],
+      })
+    : undefined;
   if (existing) {
+    // Le portail doit proposer les prix ACTUELS (passage mensuel ↔ annuel)
+    const offered =
+      existing.features.subscription_update.products?.[0]?.prices ?? [];
+    const quantityLocked =
+      existing.features.subscription_update.products?.[0]?.adjustable_quantity
+        ?.enabled === false;
+    const upToDate =
+      quantityLocked &&
+      offered.length === priceIds.length &&
+      priceIds.every((id) => offered.includes(id));
+    if (!upToDate) {
+      const updated = await stripe.billingPortal.configurations.update(
+        existing.id,
+        {
+          features: {
+            subscription_update: {
+              products: [PORTAL_PRODUCT(productId, priceIds)],
+            },
+          },
+        },
+      );
+      console.log(
+        `~ Portail client : prix proposés mis à jour (${updated.id})`,
+      );
+      return updated;
+    }
     console.log(`✓ Portail client existant : ${existing.id}`);
     return existing;
   }
@@ -157,7 +255,7 @@ async function findOrCreatePortal(
       subscription_update: {
         enabled: true,
         default_allowed_updates: ['price'],
-        products: [{ product: productId, prices: priceIds }],
+        products: [PORTAL_PRODUCT(productId, priceIds)],
         proration_behavior: 'create_prorations',
       },
     },

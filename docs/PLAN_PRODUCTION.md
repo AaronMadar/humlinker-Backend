@@ -11,7 +11,7 @@ Règle de travail : chaque étape = une branche ; validée → fusionnée dans `
 | 0 | Remise à plat Git | ✅ Fait |
 | 1 | Sécurité critique | ✅ Fait |
 | 2 | Offres et quotas (gratuit / Pro) | ✅ Fait |
-| 3 | Paiement Stripe | ✅ Fait — **à tester avec vos clés Stripe** (voir « Actions de votre côté ») |
+| 3 | Paiement Stripe (€, $, £, ₪) | ✅ Fait — offre créée en mode test ; reste le test de paiement complet (Docker + Stripe CLI) |
 | 4 | IA médiatrice : prompt, fiabilité, coût | ✅ Fait — évaluation 340/340 |
 | 5 | Auth pro + suppression de compte | ⏳ À faire |
 | 6 | Tests + CI GitHub Actions | ⏳ À faire (71+ tests unitaires et évaluation IA déjà en place) |
@@ -44,6 +44,17 @@ Règle de travail : chaque étape = une branche ; validée → fusionnée dans `
 - Quotas Pro ancrés sur la date d'abonnement (y compris en annuel).
 
 ### 3. Paiement Stripe
+Offre créée sur le compte de test par `npm run stripe:setup` (idempotent, à relancer avec la clé live au lancement).
+
+| | Mensuel | Annuel |
+|---|---|---|
+| € (référence) | 6,99 € | 59 € |
+| $ (défaut, reste du monde) | 7,99 $ | 65 $ |
+| £ (Royaume-Uni) | 5,99 £ | 50 £ |
+| ₪ (Israël) | 25,90 ₪ | 212 ₪ |
+
+Autres devises = prix en euros au taux BCE du 18/11/2026, arrondi au-dessus. Devise choisie selon la localisation du client (fuseau horaire), dollar par défaut.
+
 Checkout mensuel/annuel, portail client (résiliation, carte, factures), webhooks signés, accès Pro synchronisé :
 - résiliation → Pro jusqu'à la fin de la période payée ; impayé au renouvellement → 3 jours de grâce max, puis gratuit.
 
@@ -57,7 +68,7 @@ Checkout mensuel/annuel, portail client (résiliation, carte, factures), webhook
 
 ## Actions de votre côté
 
-1. **Stripe (mode test)** : créer le produit « Humlinker Pro » avec un prix mensuel et un prix annuel, activer le portail client, renseigner dans `.env` : `STRIPE_SECRET_KEY`, `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_PRO_YEARLY`, puis `stripe listen --forward-to localhost:3000/api/v1/billing/webhook` → `STRIPE_WEBHOOK_SECRET`. Tester avec la carte 4242 4242 4242 4242.
+1. **Stripe** : ✅ clé de test en place, offre créée. Reste : lancer Docker Desktop et installer la Stripe CLI pour le test de paiement complet (voir docs/DEMARRAGE.md).
 2. **Gemini** : vérifier que la clé `GEMINI_API_KEY` est sur une offre **payante** (l'offre gratuite peut utiliser les messages pour entraîner les modèles — incompatible avec des messages privés).
 3. **`ADMIN_ALERT_EMAIL`** : renseigner l'email qui reçoit les alertes de budget.
 
