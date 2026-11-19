@@ -7,7 +7,11 @@ import type { User } from '../modules/users/entities';
  */
 export type SafeUser = Omit<
   User,
-  'passwordHash' | 'fcmToken' | 'stripeCustomerId' | 'stripeSubscriptionId'
+  | 'passwordHash'
+  | 'fcmToken'
+  | 'stripeCustomerId'
+  | 'stripeSubscriptionId'
+  | 'tokenVersion'
 >& {
   /** Le compte a un mot de passe (confirmation demandée pour les actions sensibles) */
   hasPassword: boolean;
@@ -22,6 +26,7 @@ export function sanitizeUser(user: User): SafeUser {
     fcmToken: _fcm,
     stripeCustomerId: _sc,
     stripeSubscriptionId: _ss,
+    tokenVersion: _tv,
     ...safeUser
   } = user;
   return { ...safeUser, hasPassword: !!user.passwordHash };

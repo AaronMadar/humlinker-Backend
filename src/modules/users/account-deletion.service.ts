@@ -9,7 +9,8 @@
  *    (on ne peut plus lui écrire) ;
  *  - le compte est anonymisé : nom, email, téléphone, mot de passe, photo, jeton
  *    de notification effacés, PIN remplacé, date de suppression posée. Plus
- *    aucune connexion possible (les jetons existants deviennent invalides).
+ *    aucune connexion possible (les jetons existants deviennent invalides) ;
+ *  - toutes ses sessions sont révoquées (SessionService.revokeAll).
  *
  * Ce qui est conservé : l'identifiant technique (anonyme) pour la cohérence des
  * données comptables (usage_records, factures Stripe — obligation légale de
@@ -28,6 +29,7 @@ import { PrismaService } from '../../database';
 import { RedisService } from '../../redis/redis.service';
 import { StripeService } from '../billing/stripe.service';
 import { USERS_REPOSITORY, type UsersRepository } from './repositories';
+import { SessionService } from '../auth/sessions/session.service';
 
 /** Ce que voient les autres participants à la place du compte supprimé */
 export const DELETED_PARTICIPANT = {
@@ -50,6 +52,7 @@ export class AccountDeletionService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly stripe: StripeService,
+    private readonly sessions: SessionService,
   ) {}
 
   async deleteAccount(userId: string, password?: string): Promise<void> {
@@ -114,7 +117,12 @@ export class AccountDeletionService {
       }),
     ]);
 
-    // 5. Caches liés à ses conversations
+    // 5. Toutes ses sessions fermées (jetons de rafraîchissement + jetons d'accès)
+    await this.sessions.revokeAll(userId).catch((err: unknown) =>
+      this.logger.warn(`Révocation des sessions de ${userId} échouée : ${String(err)}`),
+    );
+
+    // 6. Caches liés à ses conversations
     await Promise.all(
       ownIds.map((id) => this.redis.del(`draft-versions:${id}`).catch(() => {})),
     );

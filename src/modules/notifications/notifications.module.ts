@@ -13,10 +13,13 @@ import { APP_CONFIG } from '@/config';
 import configuration from '@/config/configuration';
 import { NotificationsService } from './notifications.service';
 import { HumlinkerGateway } from '../messages/gateway/humlinker.gateway';
+import { SessionsModule } from '../auth/sessions/sessions.module';
 
 @Global()
 @Module({
   imports: [
+    // Vérification des sessions au handshake WebSocket + coupure à la révocation
+    SessionsModule,
     JwtModule.registerAsync({
       inject: [APP_CONFIG],
       useFactory: (config: ReturnType<typeof configuration>) => ({

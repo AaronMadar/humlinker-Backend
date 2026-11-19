@@ -16,7 +16,6 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import { OAuth2Client } from 'google-auth-library';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
@@ -30,7 +29,7 @@ import type { RegisterUserDto } from './dto/register-user.dto';
 import type { LoginDto } from './dto/login.dto';
 import type { GoogleAuthDto } from './dto/google-auth.dto';
 import type { CompleteGoogleProfileDto } from './dto/complete-google-profile.dto';
-import type { JwtPayload } from './interfaces/jwt-payload.interface';
+import { SessionService, type SessionUser } from './sessions/session.service';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -43,7 +42,10 @@ const PIN_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans 0/O et 1/I pour é
 
 export interface AuthResult {
   user: SafeUser;
+  /** Jeton d'accès court (Bearer) */
   token: string;
+  /** Jeton de rafraîchissement (POST /auth/refresh) — absent si la session continue */
+  refreshToken?: string;
   requiresProfileCompletion?: boolean;
 }
 
@@ -56,7 +58,7 @@ export class AuthService {
     private readonly usersRepository: UsersRepository,
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
-    private readonly jwtService: JwtService,
+    private readonly sessions: SessionService,
     private readonly otpService: OtpService,
     private readonly redis: RedisService,
   ) {
@@ -116,8 +118,8 @@ export class AuthService {
       role: 'user',
     });
 
-    const token = this.generateToken(user._id, user.role);
-    return { user: sanitizeUser(user), token };
+    const tokens = await this.sessions.createSession(user);
+    return { user: sanitizeUser(user), ...tokens };
   }
 
   // ─── Connexion ────────────────────────────────────────────────────────────
@@ -160,8 +162,8 @@ export class AuthService {
     const updatedUser =
       (await this.usersRepository.updateLastLoginAt(user._id, new Date())) ?? user;
 
-    const token = this.generateToken(updatedUser._id, updatedUser.role);
-    return { user: sanitizeUser(updatedUser), token };
+    const tokens = await this.sessions.createSession(updatedUser);
+    return { user: sanitizeUser(updatedUser), ...tokens };
   }
 
   // ─── Google Auth ──────────────────────────────────────────────────────────
@@ -184,11 +186,11 @@ export class AuthService {
         (await this.usersRepository.updateLastLoginAt(existingUser._id, new Date())) ??
         existingUser;
 
-      const token = this.generateToken(updatedUser._id, updatedUser.role);
+      const tokens = await this.sessions.createSession(updatedUser);
       const profileIncomplete = !updatedUser.phoneNumber;
       return {
         user: sanitizeUser(updatedUser),
-        token,
+        ...tokens,
         ...(profileIncomplete && { requiresProfileCompletion: true }),
       };
     }
@@ -208,8 +210,8 @@ export class AuthService {
       role: 'user',
     });
 
-    const token = this.generateToken(newUser._id, newUser.role);
-    return { user: sanitizeUser(newUser), token, requiresProfileCompletion: true };
+    const tokens = await this.sessions.createSession(newUser);
+    return { user: sanitizeUser(newUser), ...tokens, requiresProfileCompletion: true };
   }
 
   // ─── Reset password ───────────────────────────────────────────────────────
@@ -228,11 +230,17 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     await this.usersRepository.update(user._id, { passwordHash });
+    // Mot de passe oublié = peut-être volé : toutes les sessions sont fermées
+    await this.sessions.revokeAll(user._id);
   }
 
   // ─── Complete Google profile ──────────────────────────────────────────────
 
-  async completeGoogleProfile(userId: string, dto: CompleteGoogleProfileDto): Promise<AuthResult> {
+  async completeGoogleProfile(
+    userId: string,
+    dto: CompleteGoogleProfileDto,
+    sid?: string,
+  ): Promise<AuthResult> {
     await this.otpService.checkPhoneVerifiedAndClear(dto.phoneNumber);
 
     await this.assertNoDuplicates({ phoneNumber: dto.phoneNumber }, userId);
@@ -247,15 +255,37 @@ export class AuthService {
       throw new BadRequestException('Utilisateur introuvable.');
     }
 
-    const token = this.generateToken(updated._id, updated.role);
-    return { user: sanitizeUser(updated), token };
+    return { user: sanitizeUser(updated), ...(await this.issueTokens(updated, sid)) };
+  }
+
+  // ─── Sessions ─────────────────────────────────────────────────────────────
+
+  refresh(refreshToken: string) {
+    return this.sessions.refresh(refreshToken);
+  }
+
+  logout(refreshToken: string) {
+    return this.sessions.logout(refreshToken);
+  }
+
+  async logoutAll(userId: string): Promise<void> {
+    await this.sessions.revokeAll(userId);
   }
 
   // ─── Utilitaires ──────────────────────────────────────────────────────────
 
-  generateToken(userId: string, role: 'user' | 'admin'): string {
-    const payload: JwtPayload = { userId, role };
-    return this.jwtService.sign(payload);
+  /**
+   * Nouveau jeton d'accès pour la session courante si elle existe encore,
+   * sinon (ancien jeton sans session) ouverture d'une nouvelle session.
+   */
+  private async issueTokens(
+    user: SessionUser,
+    sid?: string,
+  ): Promise<{ token: string; refreshToken?: string }> {
+    if (sid && (await this.sessions.isSessionActive(sid))) {
+      return { token: this.sessions.signAccessToken(user, sid) };
+    }
+    return this.sessions.createSession(user);
   }
 
   /** Génère un PIN unique de 8 caractères (réessaie si collision). */

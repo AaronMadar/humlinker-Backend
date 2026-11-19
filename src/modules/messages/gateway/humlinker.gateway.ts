@@ -14,6 +14,7 @@
  *  'new_message'      → nouveau realMessage reçu dans un humlinker
  *  'draft_updated'    → objectiveMessage du draft actif mis à jour
  *  'humlinker_blocked'→ humlinker bloqué par l'autre côté
+ *  'session_revoked'  → session fermée (le socket est ensuite coupé)
  *
  * ─── Événements reçus (client → server) ───────────────────────────────────
  *  Aucun pour l'instant — toutes les actions passent par les routes HTTP REST.
@@ -24,9 +25,16 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
-import { Logger, UnauthorizedException } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { OnEvent } from '@nestjs/event-emitter';
 import type { Server, Socket } from 'socket.io';
+import type { JwtPayload } from '../../auth/interfaces/jwt-payload.interface';
+import {
+  SESSIONS_REVOKED,
+  SessionService,
+  type SessionsRevokedEvent,
+} from '../../auth/sessions/session.service';
 
 @WebSocketGateway({
   // CORS géré par CorsIoAdapter (origines de FRONTEND_URL) — voir main.ts
@@ -40,7 +48,10 @@ export class HumlinkerGateway
 
   private readonly logger = new Logger(HumlinkerGateway.name);
 
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly sessions: SessionService,
+  ) {}
 
   // ─── Connexion ────────────────────────────────────────────────────────────
 
@@ -49,14 +60,16 @@ export class HumlinkerGateway
       const token =
         (socket.handshake.auth?.token as string)?.replace('Bearer ', '') ?? '';
 
-      const payload = this.jwtService.verify<{
-        userId: string;
-        scope?: string;
-      }>(token);
+      const payload = this.jwtService.verify<JwtPayload>(token);
       // Jeton invité : accès limité à UN humlinker par HTTP ; la room user:<id>
       // recevrait les événements de toutes ses conversations → refusé.
       if (payload.scope) throw new Error('guest token');
+      // Session révoquée (déconnexion, tous les appareils, mot de passe changé)
+      if (!(await this.sessions.isAccessPayloadValid(payload))) {
+        throw new Error('revoked session');
+      }
       socket.data.userId = payload.userId;
+      socket.data.sid = payload.sid ?? null;
 
       // Chaque user rejoint sa room personnelle → ciblage précis des events
       await socket.join(`user:${payload.userId}`);
@@ -71,6 +84,26 @@ export class HumlinkerGateway
   handleDisconnect(socket: Socket): void {
     if (socket.data.userId) {
       this.logger.log(`WebSocket déconnecté : userId=${socket.data.userId}`);
+    }
+  }
+
+  /**
+   * Sessions révoquées → les sockets concernés sont coupés (le client se
+   * reconnecte avec un jeton valide, ou pas du tout s'il est déconnecté).
+   */
+  @OnEvent(SESSIONS_REVOKED)
+  async onSessionsRevoked(event: SessionsRevokedEvent): Promise<void> {
+    if (!this.server) return;
+    const sockets = await this.server.in(`user:${event.userId}`).fetchSockets();
+    for (const s of sockets) {
+      const sid = (s.data as { sid?: string | null }).sid ?? null;
+      const concerned = event.onlySid
+        ? sid === event.onlySid
+        : !event.exceptSid || sid !== event.exceptSid;
+      if (concerned) {
+        s.emit('session_revoked', {});
+        s.disconnect(true);
+      }
     }
   }
 

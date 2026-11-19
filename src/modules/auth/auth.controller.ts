@@ -28,10 +28,13 @@ import { SendOtpEmailDto, SendOtpPhoneDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { CompleteGoogleProfileDto } from './dto/complete-google-profile.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import type { TokenPair } from './sessions/session.service';
 
 interface AuthResponseData {
   user: SafeUser;
   token: string;
+  refreshToken?: string;
   requiresProfileCompletion?: boolean;
 }
 
@@ -212,7 +215,62 @@ export class AuthController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: CompleteGoogleProfileDto,
   ): Promise<AppApiResponse<AuthResponseData>> {
-    const result = await this.authService.completeGoogleProfile(user.userId, dto);
+    const result = await this.authService.completeGoogleProfile(user.userId, dto, user.sid);
     return { success: true, data: result, timestamp: new Date().toISOString() };
+  }
+
+  // ─── Sessions ─────────────────────────────────────────────────────────────
+
+  @Public()
+  @Post('refresh')
+  @RateLimit({ name: '15min', by: 'ip', limit: 120, windowSec: 15 * MINUTE })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Renouveler le jeton d'accès",
+    description:
+      "Échange le jeton de rafraîchissement contre un nouveau jeton d'accès (15 min) ET un nouveau jeton de rafraîchissement (rotation : l'ancien n'est plus valable). Réutiliser un ancien jeton révoque toute la session (code `refresh_reused`). Code `refresh_race` : un autre onglet vient de rafraîchir — relire le jeton stocké.",
+  })
+  @ApiBody({ type: RefreshTokenDto })
+  @ApiResponse({ status: 200, description: 'Nouvelle paire de jetons.' })
+  @ApiResponse({ status: 401, description: 'Jeton invalide, expiré, révoqué ou réutilisé.' })
+  async refresh(@Body() dto: RefreshTokenDto): Promise<AppApiResponse<TokenPair>> {
+    const data = await this.authService.refresh(dto.refreshToken);
+    return { success: true, data, timestamp: new Date().toISOString() };
+  }
+
+  @Public()
+  @Post('logout')
+  @RateLimit({ name: '15min', by: 'ip', limit: 60, windowSec: 15 * MINUTE })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Se déconnecter (cet appareil)',
+    description:
+      "Révoque la session du jeton de rafraîchissement fourni : il ne peut plus servir et les jetons d'accès de cette session sont refusés immédiatement. Idempotent.",
+  })
+  @ApiBody({ type: RefreshTokenDto })
+  @ApiResponse({ status: 200, description: 'Session fermée.' })
+  async logout(@Body() dto: RefreshTokenDto): Promise<AppApiResponse<null>> {
+    await this.authService.logout(dto.refreshToken);
+    return { success: true, data: null, message: 'Déconnecté.', timestamp: new Date().toISOString() };
+  }
+
+  @Post('logout-all')
+  @RateLimit({ name: 'hour', by: 'user', limit: 10, windowSec: HOUR })
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Déconnecter tous mes appareils',
+    description:
+      "Révoque toutes les sessions de l'utilisateur (y compris celle-ci) et invalide tous les jetons d'accès déjà émis.",
+  })
+  @ApiResponse({ status: 200, description: 'Toutes les sessions sont fermées.' })
+  async logoutAll(@CurrentUser() user: AuthenticatedUser): Promise<AppApiResponse<null>> {
+    await this.authService.logoutAll(user.userId);
+    return {
+      success: true,
+      data: null,
+      message: 'Tous les appareils ont été déconnectés.',
+      timestamp: new Date().toISOString(),
+    };
   }
 }

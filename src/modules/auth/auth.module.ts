@@ -7,6 +7,7 @@
  *  - AuthService      → logique d'auth (register, login, google, OTP)
  *  - OtpService       → génération / vérification des codes OTP via Redis
  *  - JwtStrategy      → stratégie Passport pour valider les JWT entrants
+ *  - SessionService   → (SessionsModule) jetons d'accès courts + rafraîchissement
  *  - JwtAuthGuard     → guard global appliqué à toutes les routes (sauf @Public())
  *  - GuestScopeGuard  → guard global : jeton invité limité à son humlinker miroir
  *
@@ -31,10 +32,12 @@ import { AuthService } from './auth.service';
 import { OtpService } from './services/otp.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { GuestScopeGuard } from './guest/guest-scope.guard';
+import { SessionsModule } from './sessions/sessions.module';
 
 @Module({
   imports: [
     forwardRef(() => UsersModule),
+    SessionsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       inject: [APP_CONFIG],
@@ -67,6 +70,6 @@ import { GuestScopeGuard } from './guest/guest-scope.guard';
       useClass: GuestScopeGuard,
     },
   ],
-  exports: [AuthService, JwtModule, PassportModule],
+  exports: [AuthService, JwtModule, PassportModule, SessionsModule],
 })
 export class AuthModule {}

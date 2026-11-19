@@ -95,6 +95,21 @@ export class RedisService implements OnModuleDestroy {
     return ttl > 0 ? ttl : 0;
   }
 
+  /** Ajoute un membre à un ensemble et (re)pose son TTL (index des sessions d'un utilisateur). */
+  async sadd(key: string, member: string, ttlSeconds: number): Promise<void> {
+    await this.client.multi().sadd(key, member).expire(key, ttlSeconds).exec();
+  }
+
+  /** Retire un membre d'un ensemble. */
+  async srem(key: string, member: string): Promise<void> {
+    await this.client.srem(key, member);
+  }
+
+  /** Membres d'un ensemble ([] si absent). */
+  async smembers(key: string): Promise<string[]> {
+    return this.client.smembers(key);
+  }
+
   // Ferme proprement la connexion Redis à la destruction du module NestJS
   onModuleDestroy() {
     this.client.disconnect();
