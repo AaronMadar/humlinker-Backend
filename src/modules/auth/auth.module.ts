@@ -8,6 +8,7 @@
  *  - OtpService       → génération / vérification des codes OTP via Redis
  *  - JwtStrategy      → stratégie Passport pour valider les JWT entrants
  *  - JwtAuthGuard     → guard global appliqué à toutes les routes (sauf @Public())
+ *  - GuestScopeGuard  → guard global : jeton invité limité à son humlinker miroir
  *
  * Imports :
  *  - UsersModule      → accès au repository users (forwardRef pour éviter la dépendance circulaire)
@@ -29,6 +30,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { OtpService } from './services/otp.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { GuestScopeGuard } from './guest/guest-scope.guard';
 
 @Module({
   imports: [
@@ -57,6 +59,12 @@ import { JwtStrategy } from './strategies/jwt.strategy';
       // Enregistré APRÈS JwtAuthGuard → req.user est connu pour les limites par utilisateur
       provide: APP_GUARD,
       useClass: RateLimitGuard,
+    },
+    {
+      // APRÈS JwtAuthGuard : restreint les jetons invités (lien « Répondre »
+      // envoyé par email) à leur seul humlinker miroir — voir guest-scope.guard.ts
+      provide: APP_GUARD,
+      useClass: GuestScopeGuard,
     },
   ],
   exports: [AuthService, JwtModule, PassportModule],

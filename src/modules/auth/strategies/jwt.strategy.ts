@@ -7,6 +7,7 @@ import {
   USERS_REPOSITORY,
   type UsersRepository,
 } from '@/modules/users/repositories';
+import { GUEST_SCOPE } from '../guest/guest-token';
 import type { AuthenticatedUser, JwtPayload } from '../interfaces/jwt-payload.interface';
 
 @Injectable()
@@ -28,6 +29,25 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const user = await this.usersRepository.findById(payload.userId);
     if (!user) {
       throw new UnauthorizedException('Invalid token');
+    }
+
+    // Jeton invité (lien « Répondre » d'un email) : seulement pour un
+    // destinataire encore sans compte. Une fois inscrit, il se connecte
+    // normalement et l'ancien lien ne fonctionne plus.
+    if (payload.scope !== undefined) {
+      if (
+        payload.scope !== GUEST_SCOPE ||
+        !payload.humlinkerId ||
+        !user.isPlaceholder
+      ) {
+        throw new UnauthorizedException('Invalid token');
+      }
+      return {
+        userId: user._id,
+        role: 'user',
+        scope: GUEST_SCOPE,
+        humlinkerId: payload.humlinkerId,
+      };
     }
 
     return {
