@@ -47,7 +47,8 @@ src/
 - **Prompt** : `ai.prompt.ts` — source unique des règles de médiation (fidélité, désescalade, refus des menaces/harcèlement, ton formel, sécurité).
 - **Robustesse** : règles en instruction système, messages utilisateurs transmis comme **données JSON** (anti prompt-injection), schéma de réponse imposé + validation, délai max + nouvel essai, filet de sécurité contre les généralisations accusatrices.
 - Si l'IA échoue : rien n'est enregistré, le quota n'est pas décompté, l'utilisateur récupère son message (503 `AI_UNAVAILABLE`).
-- Réglages : `AI_MODEL`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`, `AI_THINKING_BUDGET` (0 par défaut : même qualité mesurée, 3,4× moins cher).
+- Réglages : `AI_MODEL`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`, `AI_THINKING_BUDGET` (0 par défaut : même qualité mesurée, 3,4× moins cher), `AI_THINKING_BUDGET_GENDERED` (512 : raisonnement activé seulement pour l'hébreu et l'arabe, dont les accords en dépendent).
+- Le genre de l'expéditeur (profil) est transmis à l'IA pour les accords ; s'il est inconnu, formulation neutre.
 
 ### Offres, quotas et coûts (`src/modules/billing`)
 - Limites de chaque offre : **`plans.config.ts`** (source unique). L'IA étant médiatrice des deux côtés, les réponses dans un humlinker reçu ont leur propre quota (`ai_reply`).
@@ -89,11 +90,11 @@ npm run eval:ai     # évaluation de l'IA contre le vrai Gemini (~0,06 $)
 ```
 
 ### Évaluation de l'IA (`test/ai-eval`)
-34 cas réels en 8 catégories (transmission, fidélité des détails, désescalade, mise à jour, hors sujet, refus, sécurité, langues), joués plusieurs fois et vérifiés automatiquement : bon résultat, faits conservés, insultes et généralisations absentes, tournure indirecte, jamais de « je » du Sender, bonne langue et forme de politesse.
+39 cas réels en 8 catégories (transmission, fidélité des détails, désescalade, mise à jour, hors sujet, refus, sécurité, langues), joués plusieurs fois et vérifiés automatiquement : bon résultat, faits conservés, insultes et généralisations absentes, tournure indirecte, jamais de « je » du Sender, bonne langue et forme de politesse.
 
 - `EVAL_RUNS=5 npm run eval:ai` pour plus de confiance, `EVAL_ONLY=C` pour une seule catégorie.
 - **À relancer après toute modification du prompt ou du modèle.** Ajouter un cas à chaque défaut constaté en production.
-- Dernier résultat (19/11/2026) : **340/340 conformes** sur 2 validations × 34 cas × 5 essais.
+- Dernier résultat (19/11/2026) : **390/390 conformes** sur 2 validations × 39 cas × 5 essais (français, anglais, espagnol, allemand, hébreu, arabe ; genre de l'expéditeur connu ou non).
 
 ---
 

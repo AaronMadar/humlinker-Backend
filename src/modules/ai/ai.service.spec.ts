@@ -6,6 +6,7 @@ import {
   AiUnavailableException,
   buildAiPayload,
   hasAccusatoryGeneralization,
+  isWrongScript,
   isRetriable,
   parseAiResponse,
   type AiContext,
@@ -146,6 +147,7 @@ describe('AiService.processUserMessage', () => {
       timeoutMs: 1000,
       maxOutputTokens: 1024,
       thinkingBudget: 0,
+      thinkingBudgetGendered: 512,
     },
   } as unknown as ReturnType<typeof configuration>;
 
@@ -240,6 +242,50 @@ describe('AiService.processUserMessage', () => {
     });
   });
 
+  it('la 2e tentative reçoit une correction ciblée du serveur (pas un essai à l’aveugle)', async () => {
+    generate
+      .mockResolvedValueOnce(
+        reply(good({ realMessage: 'Léa vous dit que cela arrive souvent.' })),
+      )
+      .mockResolvedValueOnce(reply(good()));
+    await service.processUserMessage(ctx());
+    const second = generate.mock.calls[1][0].contents;
+    expect(Array.isArray(second)).toBe(true);
+    expect(second[1].role).toBe('model');
+    expect(second[2].parts[0].text).toMatch(
+      /CORRECTION DU SERVEUR HUMLINKER.*généralisation/,
+    );
+  });
+
+  it('active le raisonnement seulement pour l’hébreu et l’arabe', async () => {
+    generate.mockResolvedValue(reply(good()));
+    await service.processUserMessage(ctx());
+    expect(generate.mock.calls[0][0].config.thinkingConfig).toEqual({
+      thinkingBudget: 0,
+    });
+    await service.processUserMessage(ctx({ targetLanguage: 'he' }));
+    expect(generate.mock.calls[1][0].config.thinkingConfig).toEqual({
+      thinkingBudget: 512,
+    });
+    await service.processUserMessage(ctx({ senderLanguage: 'ar' }));
+    expect(generate.mock.calls[2][0].config.thinkingConfig).toEqual({
+      thinkingBudget: 512,
+    });
+  });
+
+  it('refait la réponse si l’objectif n’est pas dans la langue du Sender (hébreu)', async () => {
+    generate
+      .mockResolvedValueOnce(
+        reply(good({ objectiveMessage: 'Vous souhaitez informer Marc…' })),
+      )
+      .mockResolvedValueOnce(
+        reply(good({ objectiveMessage: 'ברצונך להודיע למרק…' })),
+      );
+    const r = await service.processUserMessage(ctx({ senderLanguage: 'he' }));
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(r.objectiveMessage).toContain('ברצונך');
+  });
+
   it('refait la réponse une fois si le message contient une généralisation accusatrice', async () => {
     generate
       .mockResolvedValueOnce(
@@ -290,5 +336,18 @@ describe('hasAccusatoryGeneralization', () => {
   });
   it('ne s’applique qu’aux langues configurées', () => {
     expect(hasAccusatoryGeneralization('as usual', 'en')).toBe(false);
+  });
+});
+
+describe('isWrongScript (langues à alphabet non latin)', () => {
+  it('détecte un texte qui devrait être en hébreu ou en arabe mais ne l’est pas', () => {
+    expect(isWrongScript('Vous souhaitez informer Pierre…', 'he')).toBe(true);
+    expect(isWrongScript('ברצונך להודיע לפייר', 'he')).toBe(false);
+    expect(isWrongScript('Hello', 'ar')).toBe(true);
+    expect(isWrongScript('تودّ إبلاغ', 'ar')).toBe(false);
+  });
+  it('ne juge pas les langues à alphabet latin ni les textes vides', () => {
+    expect(isWrongScript('Hola', 'fr')).toBe(false);
+    expect(isWrongScript('', 'he')).toBe(false);
   });
 });

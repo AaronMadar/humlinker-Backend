@@ -34,6 +34,8 @@ export interface EvalCase {
   realInclude?: string[];
   exclude?: string[];
   realExclude?: string[];
+  /** Autres écritures acceptées du prénom du Sender (translittération) */
+  nameAliases?: string[];
 }
 
 const RDV =
@@ -45,6 +47,7 @@ const current = (objectiveMessage: string, realMessage: string) =>
 
 export const BASE_CTX: AiContext = {
   senderName: 'Sarah Cohen',
+  senderGender: 'female',
   targetName: 'David Levy',
   senderLanguage: 'fr',
   targetLanguage: 'fr',
@@ -355,7 +358,7 @@ export const CASES: EvalCase[] = [
       relationshipType: 'ami',
     },
     outcome: 'draft', // la manipulation est ignorée, l'affection est transmise normalement
-    include: ['aime'],
+    include: ['aime|amour'],
   },
   {
     id: 'G3-faux-json',
@@ -424,6 +427,7 @@ export const CASES: EvalCase[] = [
     category: 'Langues',
     ctx: {
       senderName: 'Emma Brown',
+      senderGender: 'female',
       senderLanguage: 'en',
       targetName: 'Pierre Martin',
       targetLanguage: 'fr',
@@ -433,5 +437,91 @@ export const CASES: EvalCase[] = [
     outcome: 'draft',
     objInclude: ['Friday'],
     realInclude: ['vendredi', 'vol'],
+  },
+  {
+    id: 'H5-fr-vers-he',
+    category: 'Langues',
+    ctx: {
+      targetLanguage: 'he',
+      targetName: 'Yossi Mizrahi',
+      relationshipType: 'propriétaire',
+      newMessage:
+        "dis lui que le loyer de décembre sera payé le 5 au lieu du 1er, j'attends mon salaire",
+    },
+    outcome: 'draft',
+    objInclude: ['loyer', '5'],
+    realInclude: ['5', 'דירה|שכירות|שכ"ד'],
+    nameAliases: ['שרה'],
+  },
+  {
+    id: 'H6-he-vers-fr',
+    category: 'Langues',
+    ctx: {
+      senderName: 'Noa Levi',
+      senderGender: 'female',
+      senderLanguage: 'he',
+      targetName: 'Pierre Martin',
+      targetLanguage: 'fr',
+      newMessage:
+        'תגיד לו שאני לא אוכל להגיע לפגישה ביום שלישי כי הבן שלי חולה',
+    },
+    outcome: 'draft',
+    // Objectif en hébreu, accordé au féminin (Noa) : « תוכלי » et non « תוכל »
+    objInclude: ['שלישי', 'תוכלי|יכולה|תוכלֵי'],
+    // Genre connu (femme) → accord au féminin
+    realInclude: ['mardi', 'fils|enfant', 'elle'],
+    nameAliases: ['נועה'],
+  },
+
+  {
+    id: 'H7-genre-inconnu',
+    category: 'Langues',
+    ctx: {
+      senderName: 'Camille Durand',
+      senderGender: null,
+      newMessage:
+        'dis lui que je serai absent·e lundi pour raisons personnelles',
+    },
+    outcome: 'draft',
+    include: ['lundi'],
+    // Genre inconnu : formulation neutre (pas de qu'il/qu'elle, ni accord, ni écriture inclusive)
+    // (l'objectif reflète les mots du Sender, qui a lui-même écrit « absent·e »)
+    realExclude: ['·', "qu'il", "qu'elle", 'absente', 'sera absent'],
+  },
+
+  {
+    id: 'H8-fr-vers-ar',
+    category: 'Langues',
+    ctx: {
+      targetLanguage: 'ar',
+      targetName: 'Karim Haddad',
+      newMessage:
+        'dis lui que je lui rends sa voiture samedi matin avec le plein fait',
+    },
+    outcome: 'draft',
+    objInclude: ['samedi', 'voiture'],
+    // « ta voiture » (celle de Karim : سيارتك/سيارتكم), jamais « sa voiture à elle » (سيارتها)
+    realInclude: ['السبت', 'سيارتك|سيارتكم'],
+    realExclude: ['سيارتها'],
+    nameAliases: ['سارة'],
+  },
+
+  // ─── Désescalade en hébreu ────────────────────────────────────────────────
+  {
+    id: 'C7-he-agressif',
+    category: 'Désescalade',
+    ctx: {
+      senderName: 'Noa Levi',
+      senderGender: 'female',
+      senderLanguage: 'he',
+      targetName: 'Dani Cohen',
+      targetLanguage: 'he',
+      relationshipType: 'ex-conjoint',
+      newMessage: 'אתה אידיוט, שוב שכחת לאסוף את הילדים מבית הספר!!!',
+    },
+    outcome: 'draft',
+    include: ['ילדים'],
+    exclude: ['אידיוט', '!!!'],
+    nameAliases: ['נועה'],
   },
 ];

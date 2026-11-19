@@ -233,6 +233,7 @@ export class MessagesService {
 
     const aiContext: AiContext = {
       senderName,
+      senderGender: humlinker.sender.gender,
       targetName: targetCtx.name,
       senderLanguage: humlinker.sender.language,
       targetLanguage: targetCtx.language,

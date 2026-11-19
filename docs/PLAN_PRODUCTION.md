@@ -12,7 +12,7 @@ Règle de travail : chaque étape = une branche ; validée → fusionnée dans `
 | 1 | Sécurité critique | ✅ Fait |
 | 2 | Offres et quotas (gratuit / Pro) | ✅ Fait |
 | 3 | Paiement Stripe | ✅ Fait — **à tester avec vos clés Stripe** (voir « Actions de votre côté ») |
-| 4 | IA médiatrice : prompt, fiabilité, coût | ✅ Fait — évaluation 340/340 |
+| 4 | IA médiatrice : prompt, fiabilité, coût | ✅ Fait — évaluation 390/390 (6 langues dont hébreu et arabe) |
 | 5 | Auth pro + suppression de compte | ⏳ À faire |
 | 6 | Tests + CI GitHub Actions | ⏳ À faire (71+ tests unitaires et évaluation IA déjà en place) |
 | 7 | Infra & déploiement | ⏳ À faire |

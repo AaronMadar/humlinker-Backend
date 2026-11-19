@@ -88,6 +88,38 @@ const STOPWORDS: Record<string, string[]> = {
     'ihnen',
     'dass',
   ],
+  ar: [
+    'في',
+    'من',
+    'على',
+    'أن',
+    'إلى',
+    'مع',
+    'لا',
+    'هذا',
+    'التي',
+    'الذي',
+    'لك',
+    'بأن',
+    'بأنها',
+    'تود',
+  ],
+  he: [
+    'של',
+    'את',
+    'על',
+    'לא',
+    'הוא',
+    'היא',
+    'כי',
+    'עם',
+    'זה',
+    'אם',
+    'אותך',
+    'לך',
+    'שלך',
+    'ב',
+  ],
 };
 
 /** Tutoiement interdit dans le message reçu par le Target. */
@@ -103,6 +135,7 @@ const FIRST_PERSON: Record<string, RegExp> = {
   en: /(^|[^\p{L}])(i|i'm|i'll|my|me|mine)(?=$|[^\p{L}])/iu,
   es: /(^|[^\p{L}])(yo|mi|mis|me|conmigo)(?=$|[^\p{L}])/iu,
   de: /(^|[^\p{L}])(ich|mein|meine|mich|mir)(?=$|[^\p{L}])/iu,
+  he: /(^|[^\p{L}])(אני|שלי|אותי)(?=$|[^\p{L}])/u,
 };
 
 const OBJECTIVE_START: Record<string, RegExp> = {
@@ -159,9 +192,20 @@ function check(c: EvalCase, r: AiDraftResult): string[] {
 
   if (c.outcome !== 'draft') return errors;
 
+  // Prénom du Sender en tête (ou sa translittération, ex. Sarah → שרה en hébreu)
   const firstName = ctx.senderName.split(' ')[0];
-  if (!real.startsWith(firstName))
-    errors.push(`message ne commence pas par « ${firstName} »`);
+  const names = [firstName, ...(c.nameAliases ?? [])];
+  // En arabe, le verbe précède souvent le sujet (« تود سارة… ») : prénom dans les 3 premiers mots
+  const head =
+    ctx.targetLanguage === 'ar'
+      ? real.split(/\s+/).slice(0, 3).join(' ')
+      : real;
+  if (
+    !names.some((n) =>
+      ctx.targetLanguage === 'ar' ? head.includes(n) : real.startsWith(n),
+    )
+  )
+    errors.push(`message ne commence pas par « ${names.join(' / ')} »`);
 
   const lang = ctx.targetLanguage;
   if (detectLang(real) !== lang)

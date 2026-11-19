@@ -60,6 +60,8 @@ export interface AiContext {
   senderName: string;
   /** Prénom + nom du Target */
   targetName: string;
+  /** Genre du Sender (profil) — pour accorder le realMessage ; null si inconnu */
+  senderGender?: 'male' | 'female' | 'other' | null;
   /** Langue du Sender — pour l'objectiveMessage */
   senderLanguage: string;
   /** Langue du Target — pour le realMessage */
@@ -107,7 +109,7 @@ const MAX_FIELD_LENGTH = 8000;
  * « toujours » seul n'y figure pas (il peut signifier « encore »).
  */
 const ACCUSATORY_GENERALIZATIONS: Record<string, RegExp> = {
-  fr: /comme d'habitude|comme toujours|à chaque fois|c'est toujours|souvent|régulièrement|récurren/i,
+  fr: /comme d'habitude|comme toujours|à chaque fois|c'est toujours|toujours (?:moi|toi|elle|lui|celle|celui) qui|souvent|régulièrement|récurren/i,
 };
 
 /** true si le realMessage contient une généralisation accusatrice connue. */
@@ -117,6 +119,22 @@ export function hasAccusatoryGeneralization(
 ): boolean {
   return ACCUSATORY_GENERALIZATIONS[targetLanguage]?.test(realMessage) ?? false;
 }
+
+/** Alphabet attendu pour les langues à écriture non latine (vérification certaine). */
+const REQUIRED_SCRIPT: Record<string, RegExp> = {
+  he: /[֐-׿]/,
+  ar: /[؀-ۿ]/,
+};
+
+/** true si le texte n'est manifestement pas écrit dans la langue attendue. */
+export function isWrongScript(text: string, language: string): boolean {
+  const script = REQUIRED_SCRIPT[language];
+  return !!script && !!text && !script.test(text);
+}
+
+/** Langues où le verbe s'accorde au genre de l'interlocuteur (raisonnement activé). */
+const GENDERED_GRAMMAR_LANGUAGES = ['he', 'ar'];
+
 const MAX_ATTEMPTS = 2;
 
 const RESPONSE_SCHEMA: Schema = {
@@ -144,6 +162,25 @@ const RESPONSE_SCHEMA: Schema = {
   ],
 };
 
+/** Noms explicites des langues : un code seul (« he ») est trop discret pour le modèle. */
+const LANGUAGE_NAMES: Record<string, string> = {
+  fr: 'français',
+  en: 'anglais',
+  es: 'espagnol',
+  ar: 'arabe',
+  pt: 'portugais',
+  de: 'allemand',
+  he: 'hébreu',
+};
+export const languageLabel = (code: string): string =>
+  LANGUAGE_NAMES[code] ? `${LANGUAGE_NAMES[code]} (${code})` : code;
+
+const GENDER_LABELS: Record<string, string> = {
+  male: 'homme',
+  female: 'femme',
+  other: 'non précisé',
+};
+
 /** Données envoyées au modèle (sérialisées en JSON). */
 export function buildAiPayload(ctx: AiContext): Record<string, unknown> {
   const currentObjective = ctx.currentDraft?.objectiveMessage ?? '';
@@ -154,8 +191,9 @@ export function buildAiPayload(ctx: AiContext): Record<string, unknown> {
     participants: {
       sender: ctx.senderName,
       target: ctx.targetName,
-      langue_sender: ctx.senderLanguage,
-      langue_target: ctx.targetLanguage,
+      genre_sender: GENDER_LABELS[ctx.senderGender ?? ''] ?? 'inconnu',
+      langue_sender: languageLabel(ctx.senderLanguage),
+      langue_target: languageLabel(ctx.targetLanguage),
       relation: ctx.relationshipType,
     },
     historique: ctx.chatHistory
@@ -249,16 +287,24 @@ export class AiService {
   private readonly ai: GoogleGenAI;
   private readonly model: string;
   private readonly generationConfig: GenerateContentConfig;
+  /** Même réglage avec un peu de raisonnement, pour les langues à accords complexes */
+  private readonly genderedConfig: GenerateContentConfig;
 
   constructor(
     @Inject(APP_CONFIG)
     private readonly config: ReturnType<typeof configuration>,
   ) {
-    const { geminiApiKey, model, timeoutMs, thinkingBudget, maxOutputTokens } =
-      this.config.ai;
+    const {
+      geminiApiKey,
+      model,
+      timeoutMs,
+      thinkingBudget,
+      thinkingBudgetGendered,
+      maxOutputTokens,
+    } = this.config.ai;
     this.ai = new GoogleGenAI({ apiKey: geminiApiKey });
     this.model = model;
-    this.generationConfig = {
+    const base: GenerateContentConfig = {
       systemInstruction: SYSTEM_INSTRUCTION,
       responseMimeType: 'application/json',
       responseSchema: RESPONSE_SCHEMA,
@@ -266,22 +312,50 @@ export class AiService {
       temperature: 0.2,
       // Plafond de sortie (raisonnement compris) : borne le coût d'un appel
       maxOutputTokens,
-      // Raisonnement interne, facturé comme de la sortie. 0 = désactivé ; null = le modèle décide.
-      ...(thinkingBudget !== null
-        ? { thinkingConfig: { thinkingBudget } }
-        : {}),
       httpOptions: { timeout: timeoutMs },
     };
+    // Raisonnement interne, facturé comme de la sortie. 0 = désactivé ; null = le modèle décide.
+    const withThinking = (budget: number | null): GenerateContentConfig => ({
+      ...base,
+      ...(budget !== null
+        ? { thinkingConfig: { thinkingBudget: budget } }
+        : {}),
+    });
+    this.generationConfig = withThinking(thinkingBudget);
+    this.genderedConfig = withThinking(thinkingBudgetGendered);
+  }
+
+  /**
+   * Hébreu et arabe accordent le verbe au genre de l'interlocuteur : sans
+   * raisonnement, le modèle rapide se trompe (mesuré : 0/5 → 5/5 avec 512 tokens).
+   */
+  private needsReasoning(context: AiContext): boolean {
+    return [context.senderLanguage, context.targetLanguage].some((l) =>
+      GENDERED_GRAMMAR_LANGUAGES.includes(l),
+    );
   }
 
   /** Un appel au modèle. Retourne le texte brut et les tokens facturés. */
   private async callModel(
     payload: string,
+    context: AiContext,
+    correction?: { previous: string; instruction: string },
   ): Promise<{ text: string | undefined; usage: AiUsage }> {
+    // Correction ciblée : la réponse précédente + une consigne du SERVEUR, dans
+    // des tours séparés (jamais mélangée aux données JSON des utilisateurs)
+    const contents = correction
+      ? [
+          { role: 'user', parts: [{ text: payload }] },
+          { role: 'model', parts: [{ text: correction.previous }] },
+          { role: 'user', parts: [{ text: correction.instruction }] },
+        ]
+      : payload;
     const response = await this.ai.models.generateContent({
       model: this.model,
-      contents: payload,
-      config: this.generationConfig,
+      contents,
+      config: this.needsReasoning(context)
+        ? this.genderedConfig
+        : this.generationConfig,
     });
     const meta = response.usageMetadata;
     return {
@@ -298,10 +372,12 @@ export class AiService {
   async processUserMessage(context: AiContext): Promise<AiDraftResult> {
     const payload = JSON.stringify(buildAiPayload(context));
     const usage: AiUsage = { inputTokens: 0, outputTokens: 0 };
+    let correction: { previous: string; instruction: string } | undefined;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        const call = await this.callModel(payload);
+        const call = await this.callModel(payload, context, correction);
+        correction = undefined;
         usage.inputTokens += call.usage.inputTokens;
         usage.outputTokens += call.usage.outputTokens;
 
@@ -318,18 +394,32 @@ export class AiService {
             usage,
           };
         }
-        // Généralisation accusatrice malgré le prompt → on refait une fois ;
-        // au dernier essai on accepte (une nuance de style ne bloque jamais l'utilisateur)
-        if (
-          attempt < MAX_ATTEMPTS &&
-          hasAccusatoryGeneralization(
-            parsed.realMessage,
-            context.targetLanguage,
-          )
-        ) {
+        // Mauvaise langue (hébreu/arabe attendus mais absents) → on refait une fois
+        const wrongLanguage =
+          isWrongScript(parsed.objectiveMessage, context.senderLanguage) ||
+          isWrongScript(parsed.realMessage, context.targetLanguage);
+        // Défauts vérifiables de façon certaine → une correction ciblée ;
+        // au dernier essai on accepte (une nuance ne bloque jamais l'utilisateur)
+        const generalization = hasAccusatoryGeneralization(
+          parsed.realMessage,
+          context.targetLanguage,
+        );
+        if ((wrongLanguage || generalization) && attempt < MAX_ATTEMPTS) {
+          const problems = [
+            wrongLanguage
+              ? `objectiveMessage doit être en ${languageLabel(context.senderLanguage)} et realMessage en ${languageLabel(context.targetLanguage)}`
+              : '',
+            generalization
+              ? 'realMessage contient une généralisation accusatrice (« souvent », « comme d’habitude », « à chaque fois », « c’est toujours… »…) : supprime-la ou remplace-la par le fait précis'
+              : '',
+          ].filter(Boolean);
           this.logger.warn(
-            `Généralisation accusatrice détectée (essai ${attempt}) — nouvel essai`,
+            `Correction demandée (essai ${attempt}) : ${problems.join(' ; ')}`,
           );
+          correction = {
+            previous: call.text ?? '',
+            instruction: `CORRECTION DU SERVEUR HUMLINKER — ta réponse ne respecte pas tes règles : ${problems.join(' ; ')}. Renvoie le JSON complet corrigé, en gardant tout le reste à l'identique.`,
+          };
           continue;
         }
         return {
